@@ -144,11 +144,12 @@ Dokploy resolves paths relative to the git clone root. Wrong `composePath` cause
 
 | Item | Owner | Blocker |
 |------|-------|---------|
-| `ghcr.io/carlosfrias/backup-runner` Dockerfile | compose-manager | ✅ **Built** (ubuntu:24.04, ansible-core 2.17, rclone, ssh, pg_dump) |
+| `registry.svc.friasc.com/carlosfrias/backup-runner` Dockerfile | compose-manager | ✅ **Built** (ubuntu:24.04, ansible-core 2.17, rclone, ssh, pg_dump) |
 | `backup-runner` entrypoint.sh | compose-manager | ✅ **Built** (set -euo pipefail, trap EXIT, healthcheck mode) |
 | Per-service backup playbooks (Authentik, NextCloud, Semaphore, etc.) | compose-manager | Image dependency |
 | `rclone` credential injection (Wasabi S3) | compose-manager | None |
 | Backup verification playbooks | compose-manager | Playbook library dependency |
+| Bring private registry into Dokploy | fleet-control | Orphan — standalone container on fnet2, not in Dokploy — easy to forget |
 
 ## §8 Boundaries & Constraints
 

@@ -112,7 +112,7 @@ After (unified service plane):
 |----------|--------|
 | **1. What builds first** | `dokploy-compose-manager` |
 | **2. Operators shared or separate** | Both (compose-manager + existing service operators) |
-| **3. Own backup-runner image** | Yes — compose-manager owns `ghcr.io/carlosfrias/backup-runner` Dockerfile |
+| **3. Own backup-runner image** | Yes — compose-manager owns `registry.svc.friasc.com/carlosfrias/backup-runner` Dockerfile |
 | **4. Route Tier 2 to compose-manager** | Updated to explicitly route Tier 2 work to compose-manager |
 | **5. Migrate existing Semaphore schedules** | Yes — migrate #50 NextCloud, #51 Semaphore, #52 Windmill, etc. to Dokploy server jobs |
 | **6. Phasing** | Scaffolded first (SKILL.md + agent config + GitHub repo), Ansible playbooks and image as separate work |

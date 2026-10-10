@@ -212,7 +212,7 @@ command: |
   docker run --rm \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v ~/.ssh:/root/.ssh:ro \
-    ghcr.io/carlosfrias/backup-runner:latest \
+    registry.svc.friasc.com/carlosfrias/backup-runner:latest \
     /entrypoint.sh backup-authentik
 ```
 
@@ -350,7 +350,7 @@ mcp__dokploy schedule-create({
   cronExpression: "0 3 * * *",
   scheduleType: "server",
   serverId: "<serverId>",
-  command: "docker run --rm \\\n  -v /var/run/docker.sock:/var/run/docker.sock \\\n  ghcr.io/carlosfrias/backup-runner:latest \\\n  /entrypoint.sh backup-<service>"
+  command: "docker run --rm \\\n  -v /var/run/docker.sock:/var/run/docker.sock \\\n  registry.svc.friasc.com/carlosfrias/backup-runner:latest \\\n  /entrypoint.sh backup-<service>"
 })
 ```
 
@@ -408,7 +408,7 @@ git push origin main
 
 | Item | Owner | Blocker | Priority |
 |------|-------|---------|---------|
-| `ghcr.io/carlosfrias/backup-runner` Dockerfile | compose-manager | None | 🔴 High |
+| `registry.svc.friasc.com/carlosfrias/backup-runner` Dockerfile | compose-manager | None | 🔴 High |
 | `backup-runner` entrypoint.sh | compose-manager | Dockerfile | 🔴 High |
 | Per-service backup playbooks (Authentik, NextCloud, Semaphore, etc.) | compose-manager | Image | 🟡 Medium |
 | `rclone` credential injection (Wasabi S3) | compose-manager | None | 🟡 Medium |

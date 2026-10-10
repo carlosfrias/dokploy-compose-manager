@@ -1,55 +1,42 @@
 # backup-runner
 
 > Ansible runner Docker image for Dokploy server job backups.
-> Runs inside the Dokploy schedule execution context. Calls Ansible playbooks from mounted playbooks directory.
+> Pushed to private registry. Runs inside the Dokploy schedule execution context.
 
-## What it does
-
-Dokploy server jobs SSH to a target host and run `bash /script.sh`. The script calls `docker run backup-runner` which executes Ansible playbooks for database dumps and volume backups.
-
-```
-Dokploy schedule (03:00 UTC)
-  → SSH to fnet2
-  → bash /etc/dokploy/schedules/<service>/script.sh
-  → docker run ghcr.io/carlosfrias/backup-runner:latest backup-<service>
-  → Ansible playbook runs pg_dump / mysqldump
-  → rclone uploads to Wasabi S3
-  → Logs stream back to Dokploy UI
-```
-
-## Build
-
-```bash
-# Local build (no push)
-docker build -t ghcr.io/carlosfrias/backup-runner:1.0.0 ./backup-runner
-
-# Local build with buildx (multi-arch)
-docker buildx build \
-  --platform linux/amd64,linux/arm64 \
-  -t ghcr.io/carlosfrias/backup-runner:1.0.0 \
-  ./backup-runner
-
-# Test healthcheck
-docker run --rm ghcr.io/carlosfrias/backup-runner:latest healthcheck
-```
-
-## CI/CD
-
-GitHub Actions (`.github/workflows/build.yml`):
-- **Push to `main`:** builds and pushes architecture-specific tags (`1.0.0-amd64`, `1.0.0-arm64`)
-- **Tag `v*`:** builds, pushes architecture-specific tags, creates and pushes multi-arch manifest
-- **Pull request:** builds without pushing
-
-## Image
+## Registry
 
 | Field | Value |
 |-------|-------|
-| Registry | `ghcr.io` |
-| Owner | `carlosfrias` |
-| Image | `ghcr.io/carlosfrias/backup-runner` |
-| Tags | `1.0.0`, `1.0.0-amd64`, `1.0.0-arm64`, `latest` (on release) |
-| Base | `quay.io/ansible/ansible-runner:stable-2.12-latest` |
-| Architectures | `amd64`, `arm64` |
+| Registry | `registry.svc.friasc.com` |
+| Image | `registry.svc.friasc.com/carlosfrias/backup-runner` |
+| Tags | `1.0.0`, `latest` |
+
+## Push
+
+```bash
+# Build and push from Mac (no GitHub Actions)
+docker --context=fnet2 buildx build \
+  --platform linux/amd64 \
+  -t registry.svc.friasc.com/carlosfrias/backup-runner:1.0.0 \
+  -t registry.svc.friasc.com/carlosfrias/backup-runner:latest \
+  --push \
+  ./backup-runner
+```
+
+`docker --context=fnet2` pushes directly from the Mac to the registry on fnet2, via the existing Docker context.
+
+## Build (local test)
+
+```bash
+# Local build and test (no push)
+docker build -t registry.svc.friasc.com/carlosfrias/backup-runner:1.0.0-test ./backup-runner
+
+# Test healthcheck
+docker run --rm \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  registry.svc.friasc.com/carlosfrias/backup-runner:1.0.0-test \
+  healthcheck
+```
 
 ## Usage
 
@@ -58,7 +45,7 @@ docker run --rm \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v ~/.ssh:/root/.ssh:ro \
   -v $(pwd)/playbooks:/runner/playbooks:ro \
-  ghcr.io/carlosfrias/backup-runner:latest authentik
+  registry.svc.friasc.com/carlosfrias/backup-runner:latest authentik
 ```
 
 ## Environment
@@ -72,17 +59,29 @@ docker run --rm \
 ## Healthcheck
 
 ```bash
-docker run --rm ghcr.io/carlosfrias/backup-runner:latest healthcheck
+docker run --rm \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  registry.svc.friasc.com/carlosfrias/backup-runner:latest \
+  healthcheck
 ```
 
 Verifies: all tools present, ansible-playbook functional, SSH connectivity.
+
+## Image
+
+| Field | Value |
+|-------|-------|
+| Base | `ubuntu:24.04` |
+| Ansible | `ansible-core==2.17.*`, `ansible-runner==2.3.*` |
+| Tools | `openssh-client`, `rclone`, `curl`, `jq`, `postgresql-client`, `mariadb-client` |
+| Architecture | `amd64` (fleet nodes are Intel/AMD) |
 
 ## Quality Gates
 
 | Gate | Standard | Status |
 |------|----------|--------|
-| DCQ-1 | No `:latest` tag | ✅ `quay.io/ansible/ansible-runner:stable` + versioned ARG |
+| DCQ-1 | No `:latest` | ✅ `ubuntu:24.04` base + `1.0.0` tag |
 | DCQ-2 | Healthcheck | ✅ `HEALTHCHECK --interval=60s CMD /entrypoint.sh healthcheck` |
 | DCQ-3 | No hardcoded secrets | ✅ All credentials via mount or env injection |
 | BQ-1 | `set -euo pipefail` | ✅ entrypoint.sh line 1 |
-| BQ-2 | `trap EXIT` | ✅ on_exit function with exit code reporting |
+| BQ-2 | `trap EXIT` | ✅ `on_exit` function with exit code reporting |

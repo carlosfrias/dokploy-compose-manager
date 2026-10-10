@@ -5,8 +5,8 @@
 # BQ-2: trap EXIT — cleanup and exit reporting
 #
 # Usage:
-#   docker run --rm ghcr.io/carlosfrias/backup-runner:latest /entrypoint.sh <service>
-#   docker run --rm ghcr.io/carlosfrias/backup-runner:latest /entrypoint.sh healthcheck
+#   docker run --rm registry.svc.friasc.com/carlosfrias/backup-runner:latest /entrypoint.sh <service>
+#   docker run --rm registry.svc.friasc.com/carlosfrias/backup-runner:latest /entrypoint.sh healthcheck
 #
 # Environment (injected by Dokploy server job):
 #   ANSIBLE_HOST_KEY_CHECKING=no

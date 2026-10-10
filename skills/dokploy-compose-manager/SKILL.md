@@ -171,14 +171,15 @@ mcp__dokploy volumeBackups-create({
 
 For stateful services (databases):
 ```bash
-# ⚠ Phase 2: backup-runner image not yet built
-# Stub the command until Phase 2 completes
+# Phase 2: backup-runner image built and verified (ubuntu:24.04, ansible-core 2.17)
+# Push to private registry before use:
+#   docker --context=fnet2 buildx build --platform linux/amd64 \\\n#     -t registry.svc.friasc.com/carlosfrias/backup-runner:1.0.0 --push ./backup-runner
 mcp__dokploy schedule-create({
   name: "Daily <service> Backup",
   cronExpression: "0 3 * * *",
   scheduleType: "server",
   serverId: "<serverId>",
-  command: "docker run --rm \\\n  -v /var/run/docker.sock:/var/run/docker.sock \\\n  ghcr.io/carlosfrias/backup-runner:latest \\\n  /entrypoint.sh backup-<service>"
+  command: "docker run --rm \\\n    -v /var/run/docker.sock:/var/run/docker.sock \\\n    -v ~/.ssh:/root/.ssh:ro \\\n    registry.svc.friasc.com/carlosfrias/backup-runner:latest \\\n    /entrypoint.sh backup-<service>"
 })
 ```
 
@@ -236,7 +237,7 @@ git push origin main
 Is the volume a database?
 │
 ├── YES → Server Job (schedule-create, scheduleType: "server")
-│         Command: docker run ghcr.io/carlosfrias/backup-runner:latest
+│         Command: docker run registry.svc.friasc.com/carlosfrias/backup-runner:latest
 │                   /entrypoint.sh backup-<service>
 │         Phase 2: backup-runner image not yet built
 │
@@ -326,7 +327,7 @@ command: |
   docker run --rm \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v ~/.ssh:/root/.ssh:ro \
-    ghcr.io/carlosfrias/backup-runner:latest \
+    registry.svc.friasc.com/carlosfrias/backup-runner:latest \
     /entrypoint.sh backup-authentik
 ```
 
@@ -345,7 +346,7 @@ command: |
 - Can reach all fleet nodes via SSH
 - Ansible runs inside the container — **no Ansible on hosts**
 
-**⚠ Phase 2 TODO:** Build and push `ghcr.io/carlosfrias/backup-runner:latest` to GHCR. Until then, server jobs are stubbed. All Phase 1 registrations use `volumeBackups` for stateless services only.
+**✅ Phase 2 (partial):** `backup-runner` image built locally (ubuntu:24.04, ansible-core 2.17, verified). Push to private registry before using. Registry: `registry.svc.friasc.com/carlosfrias/backup-runner`. See `backup-runner/` directory.
 
 ---
 
@@ -564,11 +565,11 @@ Every ad-hoc fix must be graduated:
 
 | Item | Owner | Status |
 |------|-------|--------|
-| `ghcr.io/carlosfrias/backup-runner` Dockerfile | compose-manager | TODO |
-| Ansible playbook library | compose-manager | TODO |
-| `rclone` credential injection (Wasabi S3) | compose-manager | TODO |
-| Per-service backup playbooks (Authentik, NextCloud, Semaphore, etc.) | compose-manager | TODO |
-| Backup verification playbooks | compose-manager | TODO |
+| `registry.svc.friasc.com/carlosfrias/backup-runner` Dockerfile | compose-manager | ✅ **Built** (ubuntu:24.04, ansible-core 2.17, verified) |
+| Ansible playbook library | compose-manager | In progress |
+| `rclone` credential injection (Wasabi S3) | compose-manager | Playbook library dependency |
+| Per-service backup playbooks (Authentik, NextCloud, Semaphore, etc.) | compose-manager | Playbook library dependency |
+| Backup verification playbooks | compose-manager | Playbook library dependency |
 
 ---
 

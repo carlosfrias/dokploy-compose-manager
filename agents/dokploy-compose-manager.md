@@ -143,7 +143,7 @@ schedule-create({
   cronExpression: "0 3 * * *",
   scheduleType: "server",
   serverId: "<serverId>",
-  command: "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock ghcr.io/carlosfrias/backup-runner:latest /entrypoint.sh backup-<service>"
+  command: "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock registry.svc.friasc.com/carlosfrias/backup-runner:latest /entrypoint.sh backup-<service>"
 })
 ```
 

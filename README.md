@@ -27,7 +27,7 @@ Every registration must be **idempotent** and **verified** before declaring comp
 
 ## Phase 2 TODO
 
-The `backup-runner` Docker image (`ghcr.io/carlosfrias/backup-runner:latest`) is not yet built. Phase 2 creates it. Until then, server jobs are stubbed.
+The `backup-runner` Docker image (`registry.svc.friasc.com/carlosfrias/backup-runner:1.0.0`) is built. Push it to the private registry before using it in Dokploy schedules.
 
 ## Quick Links
 
