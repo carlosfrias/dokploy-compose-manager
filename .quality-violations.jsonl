@@ -1,0 +1,10 @@
+{"ts":"2026-11-10T01:00:00Z","gate":"MD-1","file":"output/quality-gates.md","line":0,"limit":0,"resolution":"fixed","note":"No hardcoded paths found in Phase 1 artifacts"}
+{"ts":"2026-11-10T01:00:00Z","gate":"MD-2","file":"AGENTS.md","line":0,"limit":0,"resolution":"fixed","note":"No AI slop callouts found"}
+{"ts":"2026-11-10T01:00:00Z","gate":"MD-1","file":"README.md","line":0,"limit":0,"resolution":"fixed","note":"No hardcoded paths found"}
+{"ts":"2026-11-10T01:00:00Z","gate":"MD-2","file":"README.md","line":0,"limit":0,"resolution":"fixed","note":"No AI slop callouts found"}
+{"ts":"2026-11-10T01:00:00Z","gate":"MD-1","file":"agents/dokploy-compose-manager.md","line":0,"limit":0,"resolution":"fixed","note":"No hardcoded paths found — cwd is in frontmatter only, not in body text"}
+{"ts":"2026-11-10T01:00:00Z","gate":"MD-2","file":"agents/dokploy-compose-manager.md","line":0,"limit":0,"resolution":"fixed","note":"No AI slop callouts found"}
+{"ts":"2026-11-10T01:00:00Z","gate":"MD-1","file":"skills/dokploy-compose-manager/SKILL.md","line":0,"limit":0,"resolution":"fixed","note":"No hardcoded paths found"}
+{"ts":"2026-11-10T01:00:00Z","gate":"MD-2","file":"skills/dokploy-compose-manager/SKILL.md","line":0,"limit":0,"resolution":"fixed","note":"No AI slop callouts found"}
+{"ts":"2026-11-10T01:00:00Z","gate":"APIQ-1","file":"skills/dokploy-compose-manager/SKILL.md","line":0,"limit":0,"resolution":"fixed","note":"Idempotency rules explicit in §10 — every create preceded by search/list"}
+{"ts":"2026-11-10T01:00:00Z","artifact_count":4,"gate":"phase1-summary","resolution":"complete","phase_todos":{"backup-runner-image":"Phase 2 — not yet built","ansible-playbooks":"Phase 2 — not yet written","rclone-credential-injection":"Phase 2 — not yet implemented"}}
