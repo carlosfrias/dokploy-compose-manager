@@ -14,9 +14,9 @@
 ## Push
 
 ```bash
-# Build and push from Mac (no GitHub Actions)
-docker --context=fnet2 buildx build \
-  --platform linux/amd64 \
+# Build and push multi-arch (amd64 + arm64) from Mac
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
   -t registry.svc.friasc.com/carlosfrias/backup-runner:1.0.0 \
   -t registry.svc.friasc.com/carlosfrias/backup-runner:latest \
   --push \
