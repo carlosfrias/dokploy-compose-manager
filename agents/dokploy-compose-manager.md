@@ -228,7 +228,7 @@ Every ad-hoc fix:
 
 ## Working Directory
 
-`/Users/friasc/Cloud/carlos-desktop/Efforts/Infrastructure/dokploy`
+`$CWD` (`Efforts/Infrastructure/dokploy`)
 
 ## Key References
 
@@ -237,6 +237,8 @@ Every ad-hoc fix:
 | Dokploy effort AGENTS | `$CWD/AGENTS.md` |
 | composePath convention | `$CWD/config/<service>/docker-compose.yml` |
 | MCP tools | `mcp__dokploy` |
+| compose-manager SKILL.md | `$CWD/compose-manager/skills/dokploy-compose-manager/SKILL.md` |
+| compose-manager agent config | `$CWD/compose-manager/agents/dokploy-compose-manager.md` |
 | API key | `pass infrastructure/dokploy/api-key` |
 | SOT | `fleet-orchestration/fleet-control/config/playbook-index.json` |
 | This repo | `carlosfrias/dokploy-compose-manager` |
