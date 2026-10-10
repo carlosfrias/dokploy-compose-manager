@@ -1,5 +1,6 @@
 ---
 repo: carlosfrias/dokploy-compose-manager
+submodule: true
 type: operator
 tier: 2
 ---
