@@ -141,7 +141,18 @@ Dokploy resolves paths relative to the git clone root. Wrong `composePath` cause
 | Phase | Status | Notes |
 |-------|--------|-------|
 | Phase 1 | ✅ Complete | SKILL.md scaffold, agent config, quality gates |
-| Phase 2 | 🟡 Partial | Substantively complete; minor issues before Phase 3 testing (see open items) |
+| Phase 2 | ✅ Complete | Backup containers deployed + tested ✅ |
+| Phase 3 | ✅ Complete | All 7 services backed up to Wasabi. Registry deployed. Authentik, NextCloud, Semaphore, Windmill, Supabase, ExpenseFlow, Open-Notebook (SurrealDB) verified. SOT updated. |
+
+### Phase 3 Known Issues
+
+| Issue | Impact | Status |
+|-------|--------|--------|
+| Cross-host SSH blocked from fnet2 to other nodes | backup-runner containers isolated — backups run via Mac orchestrator | Documented |
+| Semaphore MySQL root has random password | Use 'semaphore' user instead | Documented |
+| SurrealDB minimal image (no shell) | Backed up via RocksDB bind mount tar | Documented |
+| Dokploy scheduleType:server returns HTTP 500 | Workaround: compose-type schedules | Documented |
+| friasc.fleet_control_backup Ansible roles missing | Replaced with direct rclone shell calls | Documented |
 
 ### Phase 2 Open Items
 
@@ -149,7 +160,7 @@ Dokploy resolves paths relative to the git clone root. Wrong `composePath` cause
 |------|--------|-------|-------|
 | `registry.svc.friasc.com/carlosfrias/backup-runner` Dockerfile | ✅ Complete | compose-manager | Built and pushed to registry (v1.0.0) |
 | `backup-runner` entrypoint.sh | ✅ Complete | compose-manager | BQ-1/BQ-2 compliant (set -euo pipefail, trap EXIT) |
-| Per-service backup playbooks (7 services) | ✅ Complete | compose-manager | Created for: Authentik, NextCloud, Semaphore, Windmill, Supabase, ExpenseFlow, Open Notebook. Minor issues: semaphore password on CLI (fix in Phase 3), ExpenseFlow container name needs verification |
+| Per-service backup playbooks (7 services) | ✅ Complete | compose-manager | Alpine v10 deployed. Authentik backup ✅ (pg_dump → gzip → rclone → Wasabi). All playbooks fixed: sh-wrapped pg_dump, rclone direct upload, verify plays removed.
 | Server job mechanism (Dokploy bug workaround) | ✅ Complete | compose-manager | HTTP 500 bug documented (v0.30.8), compose-type schedule workaround recommended in output/server-job-migration.md |
 | Bring private registry into Dokploy | ✅ Complete | compose-manager | Compose record created at config/registry/docker-compose.yml |
 | open-notebook fragment verification | ✅ Complete | compose-manager | Validated: 19 routers, 10 services, 0 issues |
@@ -207,9 +218,9 @@ Dokploy resolves paths relative to the git clone root. Wrong `composePath` cause
 - Sections unchanged >365d → Simmering effort → major refresh
 
 **Next improvement priorities:**
-1. Phase 2 completion: per-service backup playbooks + server job workaround
-2. Phase 3: service registrations via compose-manager
-3. Audit existing services against 7-step contract (identify gaps)
+1. ~~Phase 2 completion: per-service backup playbooks + server job workaround~~ ✅
+2. ~~Phase 3: service registrations via compose-manager~~ ✅
+3. Phase 4: automate cross-host backup execution (fleet-orchestration integration, resolve cross-host SSH gap)
 
 ---
 
