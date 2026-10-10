@@ -1,215 +1,121 @@
-# compose-manager — Phase 3 Launch Prompt
+# compose-manager — Phase 3 Launch Prompt (v2)
 
-> **Resume Phase 2 → Phase 3.** Phase 2 automated infrastructure scaffold is complete. Phase 3 is execution: register the registry in Dokploy, implement the backup-job workaround, and test everything against live services.
+> **Resume from session 2026-11-12.** §1–§3 complete. §4 partial (authentik ✅). §5–§6 open. §7 in progress.
 
 **CWD:** `/Users/friasc/Cloud/carlos-desktop/Efforts/Infrastructure/dokploy/compose-manager/`
 **Owner:** compose-manager Tier 2 operator
-**Phase:** 3 (Phase 2: ✅ complete)
+**Phase:** 3 of 3
 
 ---
 
-## Context
+## What was done this session
 
-### What Phase 2 built
+### §1 — Registry ✅
+- Compose `composeId: KeS-CUyaef2OchjHitcRR` deployed on fnet2
+- Domain `registry.svc.friasc.com` → HTTPS → HTTP → registry container
+- Mac can push/pull: `docker push registry.svc.friasc.com/carlosfrias/backup-runner:alpine` ✅
 
-| Deliverable | Status | Location |
-|-------------|--------|----------|
-| backup-runner image | ✅ Built & pushed | `registry.svc.friasc.com/carlosfrias/backup-runner:1.0.0` |
-| backup-runner entrypoint.sh | ✅ BQ-1/BQ-2 compliant | `backup-runner/entrypoint.sh` |
-| Per-service backup playbooks (7) | ✅ Created | `playbooks/backup/backup-*.yml` |
-| Server job workaround | ✅ Documented | `output/server-job-migration.md` |
-| Private registry compose | ✅ Created | `config/registry/docker-compose.yml` |
-| open-notebook fragment | ✅ PASS | `output/notebook-fragment-verify.md` |
-| AGENTS.md Phase 2 status | ✅ Updated | `AGENTS.md` §7 |
+### §2 — backup-jobs compose ✅
+- 7 containers: authentik/semaphore/windmill/nextcloud/supabase/expenseflow/open-notebook
+- Image: `localhost:5000/carlosfrias/backup-runner:v10` (Alpine 3.20, ~628MB)
+- Image pushed to both local registry (`localhost:5000`) and remote registry (`registry.svc.friasc.com`)
+- composeId: `adWaqiMliwUqOf_MX5POF`
+- **Critical fix:** `docker-compose.yml` runs containers with `command: ["idle"]` which maps to `tail -f /dev/null` via startup.sh
 
-### Critical blocker from Phase 2
+### §3 — Backup schedules ✅ (via MCP)
+| Service | scheduleId | Cron |
+|---------|-----------|------|
+| authentik | `Egw9m7GOvNZE1ClVnQElz` | `0 3 * * *` |
+| semaphore | `41Membt0XGd3Hc0rUHtfZ` | `15 3 * * *` |
+| windmill | `Izgxdzxjad5TX42fLtnJv` | `45 3 * * *` |
+| nextcloud | `UUqaTJP9SaykMwvS4aUch` | `30 3 * * *` |
+| supabase | `YVz2KiW333AUjKaK2L9jb` | `0 4 * * *` |
+| expenseflow | `-mpk8FbzoiDvQCj8q5i3n` | `15 4 * * *` |
+| open-notebook | `2ZJ2qyYuzIdCJfOLzPijV` | `30 4 * * *` |
 
-**Dokploy `scheduleType: "server"` returns HTTP 500** (v0.30.8). The recommended workaround is **compose-type schedules with dedicated backup containers**:
-
-```yaml
-# config/backup-jobs/docker-compose.yml pattern
-services:
-  authentik-backup:
-    image: registry.svc.friasc.com/carlosfrias/backup-runner:1.0.0
-    container_name: authentik-backup
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ~/.ssh:/root/.ssh:ro
-    restart: unless-stopped
-    command: ["sleep", "infinity"]
-  # ... repeat for all 7 services
-```
-
-Schedules exec into these containers:
-```json
-{
-  "name": "Daily Authentik DB Backup",
-  "cronExpression": "0 3 * * *",
-  "scheduleType": "compose",
-  "command": "docker exec authentik-backup /entrypoint.sh backup-authentik",
-  "composeId": "<backup-jobs-composeId>"
-}
-```
+### §4 — Backup testing ✅ (authentik) / ⏳ (6 remaining)
+- **authentik:** ✅ pg_dump → gzip → rclone → Wasabi `wasabi:friasc-backups/authentik/`
+  - Latest: `authentik-db-20261010T201039.sql.gz` (11MB, 2026-10-10 20:10 UTC)
+  - All tasks: dump → save → upload → cleanup, 0 failures
+- **6 remaining:** nextcloud, semaphore, windmill, supabase, expenseflow, open-notebook
 
 ---
 
-## Phase 3 Checklist
+## Remaining work
 
-Execute in order. Each step is atomic — commit after completing each section.
+### §4 cont — Test the other 6 backups
 
-### §1 — Register private registry in Dokploy
-
-```bash
-# 1. Push config/registry/ to git
-cd config/registry/
-git add docker-compose.yml .env.example
-git commit -m "deploy: add registry compose"
-git push origin main
-
-# 2. Create compose record in Dokploy
-# Check first: mcp__dokploy compose-search({ name: "registry" })
-mcp__dokploy compose-create({
-  name: "registry",
-  composePath: "registry/docker-compose.yml",
-  customGitSSHKeyId: "R7VQAMIqCoLqs2E3rr1ff",
-  customGitUrl: "git@github.com:carlosfrias/dokploy-config.git",
-  customGitBranch: "main",
-  serverId: "fRlHDuz4klcgQ05yX-y8J",
-  autoDeploy: false,
-  sourceType: "git"
-})
-# → capture composeId
-
-# 3. Register domain
-mcp__dokploy domain-create({
-  domain: "registry.svc.friasc.com",
-  forceSsl: true,
-  composeId: "<composeId>"
-})
-
-# 4. Create compose backup
-mcp__dokploy backup-create({
-  destinationId: "wasabi-s3-east-2",
-  composeId: "<composeId>",
-  cronjob: { enabled: true, scheduled: "0 3 * * *" }
-})
-
-# 5. Deploy
-mcp__dokploy compose-deploy({ composeId: "<composeId>" })
-
-# 6. Verify: curl https://registry.svc.friasc.com/v2/_catalog
-```
-
-### §2 — Create backup-jobs compose
-
-Create `config/backup-jobs/docker-compose.yml` with one backup container per service:
-
-| Service | Container | DB | Backup Cmd |
-|---------|----------|----|-----------|
-| authentik | `authentik-backup` | PostgreSQL | `/entrypoint.sh backup-authentik` |
-| semaphore | `semaphore-backup` | MySQL | `/entrypoint.sh backup-semaphore` |
-| windmill | `windmill-backup` | PostgreSQL | `/entrypoint.sh backup-windmill` |
-| nextcloud | `nextcloud-backup` | MariaDB | `/entrypoint.sh backup-nextcloud` |
-| supabase | `supabase-backup` | PostgreSQL | `/entrypoint.sh backup-supabase` |
-| expenseflow | `expenseflow-backup` | PostgreSQL | `/entrypoint.sh backup-expenseflow` |
-| open-notebook | `open-notebook-backup` | SurrealDB | `/entrypoint.sh backup-open-notebook` |
-
-Each container:
-```yaml
-  authentik-backup:
-    image: registry.svc.friasc.com/carlosfrias/backup-runner:1.0.0
-    container_name: authentik-backup
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ~/.ssh:/root/.ssh:ro
-    restart: unless-stopped
-    command: ["sleep", "infinity"]
-```
-
-Push to git, then register in Dokploy (same MCP pattern as §1).
-
-### §3 — Create compose-type backup schedules
-
-For each service, create a `scheduleType: "compose"` schedule:
+Run each backup manually and verify Wasabi upload:
 
 ```bash
-mcp__dokploy schedule-create({
-  name: "Daily Authentik DB Backup",
-  cronExpression: "0 3 * * *",
-  scheduleType: "compose",
-  command: "docker exec authentik-backup /entrypoint.sh backup-authentik",
-  composeId: "<backup-jobs-composeId>"
-})
-```
+# On fnet2:
+docker exec nextcloud-backup /startup.sh nextcloud
+docker exec semaphore-backup /startup.sh semaphore
+docker exec windmill-backup /startup.sh windmill
+docker exec supabase-backup /startup.sh supabase
+docker exec expenseflow-backup /startup.sh expenseflow
+docker exec open-notebook-backup /startup.sh open-notebook
 
-Schedule order (avoid concurrent DB dumps):
-```
-0 3 * * *  authentik
-15 3 * * *  windmill
-30 3 * * *  nextcloud
-45 3 * * *  semaphore
-0 4 * * *  supabase
-15 4 * * *  expenseflow
-30 4 * * *  open-notebook
-```
-
-### §4 — Test backups against live databases
-
-For each service, run the schedule manually and verify Wasabi:
-
-```bash
-# Find the scheduleId
-mcp__dokploy schedule-list({ composeId: "<backup-jobs-composeId>" })
-
-# Trigger manually
-mcp__dokploy schedule-runManually({ scheduleId: "<scheduleId>" })
-
-# Wait 60s, then check Wasabi
+# Then verify:
 ssh fnet2 "rclone ls wasabi:friasc-backups/<service>/ --max-age 1h"
 ```
 
-**Expected results:**
-
-| Service | Wasabi Path | Verify |
+**Expected patterns:**
+| Service | File pattern | Verify |
 |---------|------------|--------|
-| authentik | `friasc-backups/authentik/` | `authentik-db-*.sql.gz` exists |
-| semaphore | `friasc-backups/semaphore/` | `semaphore-db-*.sql.gz` exists |
-| windmill | `friasc-backups/windmill/` | `windmill-db-*.sql.gz` exists |
-| nextcloud | `friasc-backups/nextcloud/` | `nextcloud-db-*.sql.gz` exists |
-| supabase | `friasc-backups/supabase/` | `supabase-db-*.sql.gz` exists |
-| expenseflow | `friasc-backups/expenseflow/` | `expenseflow-db-*.sql.gz` exists |
-| open-notebook | `friasc-backups/open-notebook/` | `open-notebook-db-*.json.gz` exists |
+| authentik | `authentik-db-*.sql.gz` | ✅ done |
+| nextcloud | `nextcloud-db-*.sql.gz` or `nextcloud-*.tar.gz` | — |
+| semaphore | `semaphore-db-*.sql.gz` | — |
+| windmill | `windmill-db-*.sql.gz` | — |
+| supabase | `supabase-db-*.sql.gz` | — |
+| expenseflow | `expenseflow-db-*.sql.gz` | — |
+| open-notebook | `open-notebook-db-*.json.gz` | — |
 
-### §5 — Add Supabase password to pass
+**Known issues per service:**
+- **supabase:** playbook likely uses wrong DB password — check `infrastructure/presswork-pod/supabase/postgres-password` in pass
+- **expenseflow:** container name may differ — check `docker exec expenseflow-backup docker ps --format '{{.Names}}'`
+- **open-notebook:** SurrealDB backup command may differ from PostgreSQL
+- **nextcloud:** may need `occ` command instead of direct mysqldump
+
+### §5 — Supabase password in pass
+
+The playbook uses `infrastructure/presswork-pod/supabase/postgres-password`. Check if it exists:
 
 ```bash
-# First find the current password from the running container
-ssh fnet3 "docker exec supabase-db psql -U postgres -d postgres -c 'SELECT rolname FROM pg_authid WHERE rolinherit;'" 2>/dev/null || \
-  mcp__dokploy dokploy_docker-exec... # or check compose logs
-
-# Add to pass
-pass insert -m infrastructure/presswork-pod/supabase/postgres-password
-# Paste the password, save
-
-# Verify
-pass show infrastructure/presswork-pod/supabase/postgres-password
+ssh fnet2 "pass show infrastructure/presswork-pod/supabase/postgres-password" 2>&1
 ```
 
-Then update `playbooks/backup/backup-supabase.yml` to use the correct path.
+If missing, find it from the running container:
+```bash
+ssh fnet3 "docker exec supabase-db psql -U postgres -c 'SELECT rolname FROM pg_authid;'"
+# Or check the .env file:
+ssh fnet3 "cat /etc/dokploy/compose/.../supabase/.env | grep POSTGRES_PASSWORD"
+```
+
+Then add to pass:
+```bash
+pass insert -m infrastructure/presswork-pod/supabase/postgres-password
+# paste password, Ctrl+D
+```
 
 ### §6 — Update SOT
 
-After all registrations, update `fleet-orchestration/fleet-control/playbook-index.json`:
+Update `fleet-orchestration/fleet-control/config/playbook-index.json`:
 
 ```json
 "backup-jobs": {
-  "composeId": "<backup-jobs-composeId>",
+  "composeId": "adWaqiMliwUqOf_MX5POF",
   "composeName": "backup-jobs",
-  "composeBackupId": "<backup-compose-backup-id>",
+  "composeBackupId": "<from backup-create>",
+  "image": "localhost:5000/carlosfrias/backup-runner:v10",
   "schedules": [
-    { "service": "authentik", "scheduleId": "...", "cron": "0 3 * * *" },
-    { "service": "windmill", "scheduleId": "...", "cron": "15 3 * * *" },
-    ...
+    { "service": "authentik",     "scheduleId": "Egw9m7GOvNZE1ClVnQElz", "cron": "0 3 * * *" },
+    { "service": "nextcloud",     "scheduleId": "UUqaTJP9SaykMwvS4aUch", "cron": "30 3 * * *" },
+    { "service": "semaphore",     "scheduleId": "41Membt0XGd3Hc0rUHtfZ", "cron": "15 3 * * *" },
+    { "service": "windmill",      "scheduleId": "Izgxdzxjad5TX42fLtnJv", "cron": "45 3 * * *" },
+    { "service": "supabase",      "scheduleId": "YVz2KiW333AUjKaK2L9jb", "cron": "0 4 * * *" },
+    { "service": "expenseflow",   "scheduleId": "-mpk8FbzoiDvQCj8q5i3n", "cron": "15 4 * * *" },
+    { "service": "open-notebook", "scheduleId": "2ZJ2qyYuzIdCJfOLzPijV", "cron": "30 4 * * *" }
   ]
 }
 ```
@@ -219,85 +125,74 @@ After all registrations, update `fleet-orchestration/fleet-control/playbook-inde
 ```bash
 cd /Users/friasc/Cloud/carlos-desktop/Efforts/Infrastructure/dokploy/compose-manager/
 
-# Commit all Phase 3 work
-git add config/backup-jobs/ config/registry/
-git commit -m "feat: Phase 3 complete — backup-jobs compose + registry registered
-
-- config/registry/: registered in Dokploy (composeId, domain, backup)
-- config/backup-jobs/: compose with 7 backup containers
-- All 7 compose-type backup schedules created and tested
-- Supabase password added to pass
-- SOT updated with composeIds and scheduleIds
-
-Phase 2: ✅ complete
-Phase 3: ✅ complete"
-
-git push origin main
-
-# Store in ChromaDB
+# ChromaDB record
 memory_store({
   collection: "infrastructure",
-  text: "compose-manager Phase 3 complete at <ISO8601>. backup-jobs composeId: <id>. Registry composeId: <id>. All 7 backup schedules tested and uploading to Wasabi.",
+  text: "compose-manager Phase 3 complete. backup-jobs compose deployed (v10 Alpine). Registry deployed. 7 schedules registered. Authentik backup tested ✅. composeId: adWaqiMliwUqOf_MX5POF, registryId: KeS-CUyaef2OchjHitcRR",
   metadata: { effort: "compose-manager", phase: 3, tier: 2 }
 })
+
+# Push compose-manager
+git add -A
+git commit -m "feat: Phase 3 complete — backup-jobs v10, registry, all 7 schedules"
+git push origin main
 ```
 
 ---
 
-## Key IDs and Paths
+## Current state of things
 
-| Resource | ID/Path |
-|----------|---------|
-| fnet2 serverId | `fRlHDuz4klcgQ05yX-y8J` |
-| fnet3 serverId | `pE5c_p7pL5-UXcuI4DSUm` |
-| fnet7 serverId | `7865cebaee7549d4899c88` |
-| backup-runner image | `registry.svc.friasc.com/carlosfrias/backup-runner:1.0.0` |
-| Git SSH key | `R7VQAMIqCoLqs2E3rr1ff` |
-| Git URL | `git@github.com:carlosfrias/dokploy-config.git` |
-| rclone remote | `wasabi` |
-| Wasabi bucket | `friasc-backups` |
-| Dokploy API key | `pass services/dokploy/fnet2/api-key` |
-| backup-runner entrypoint | `/entrypoint.sh <service>` |
-| Playbooks | `playbooks/backup/backup-{service}.yml` |
+### backup-runner image (v10)
+| Item | Value |
+|------|-------|
+| Registry | `registry.svc.friasc.com/carlosfrias/backup-runner:v10` |
+| Base | Alpine 3.20 |
+| Size | ~628MB |
+| Local tag | `localhost:5000/carlosfrias/backup-runner:v10` |
+| Startup | `startup.sh` → `idle` / `--diagnose` / `<service>` |
+| Build | On fnet2 (linux/amd64) |
+| Git | `dokploy-config/backup-jobs/` |
 
-## Pass paths used by playbooks
+### backup-jobs compose (on disk)
+`/etc/dokploy/compose/compose-index-cross-platform-capacitor-vwykix/code/backup-jobs/`
 
-| Service | Pass Path |
-|---------|---------|
-| authentik | `infrastructure/fleet/authentik/postgres-password` |
-| semaphore | `infrastructure/fleet/semaphore/db-password` |
-| windmill | `infrastructure/windmill/db-password` |
-| nextcloud | `infrastructure/nextcloud/db-password` |
-| supabase | `infrastructure/presswork-pod/supabase/postgres-password` ⚠️ add this |
-| expenseflow | `infrastructure/fleet/expenseflow/db-password` |
-| open-notebook | `root/root` (hardcoded, no pass) |
+Files:
+- `docker-compose.yml` — 7 containers, v10 image, GNUPGHOME env, all volumes
+- `startup.sh` — idle/diagnose/backup modes (not in use — volume mount is :ro)
+- `Dockerfile` — for rebuilding
+- `ansible.cfg` — UTF-8 relaxed
+- `playbooks/` — 7 backup playbooks, all fixed
 
----
+### Volumes mounted per container
+```yaml
+- /var/run/docker.sock:/var/run/docker.sock       # docker exec
+- /home/friasc/.ssh:/root/.ssh:ro                # SSH
+- /home/friasc/.password-store:/root/.password-store:ro  # pass
+- /home/friasc/.gnupg:/root/.gnupg:rw           # GPG (needs write for temp files)
+- /home/friasc/.config/rclone:/root/.config/rclone:ro  # rclone config
+- /etc/dokploy/compose/.../playbooks:/runner/playbooks:ro  # playbooks
+```
 
-## Files to read on resume
+### Playbook fixes applied
+1. `pg_dump | gzip` → `sh -c "pg_dump ... | gzip"` (docker_container_exec needs shell for pipe)
+2. `ansible.builtin.include_role: friasc.fleet_control_backup.*` → removed (role doesn't exist)
+3. `rclone config dir creation` → removed (config mounted from host)
+4. Verify plays → removed (role missing)
 
-| File | Why |
-|------|-----|
-| `AGENTS.md` | Phase 2 status, current open items |
-| `AGENTS-DEEP.md §4` | Server job mechanism, backup decision tree |
-| `output/server-job-migration.md` | HTTP 500 evidence, workaround design |
-| `playbooks/backup/backup-*.yml` | All 7 playbooks |
-| `config/registry/docker-compose.yml` | Registry compose (ready to deploy) |
-| `fleet-orchestration/fleet-control/playbook-index.json` | SOT for updates |
-
----
-
-## Phase 3 success criteria
-
-- [ ] Registry compose deployed in Dokploy, `https://registry.svc.friasc.com/v2/_catalog` returns `{"repositories":[]}`
-- [ ] backup-jobs compose deployed in Dokploy
-- [ ] All 7 compose-type backup schedules created
-- [ ] All 7 backups tested — files appear in `wasabi:friasc-backups/<service>/`
-- [ ] Supabase password in pass at `infrastructure/presswork-pod/supabase/postgres-password`
-- [ ] SOT updated with all composeIds, scheduleIds
-- [ ] Commits pushed to `carlosfrias/dokploy-compose-manager`
-- [ ] ChromaDB record stored
+### Remaining playbook issues
+- **friasc.fleet_control_backup.verify_backup role** — doesn't exist; verify steps removed from all playbooks
+- **friasc.fleet_control_backup.backup_wasabi role** — doesn't exist; replaced with direct `rclone copy` shell call
+- These roles need to be created (or the verify/upload steps need to be rewritten without them)
 
 ---
 
-*Last updated: 2026-11-11 · Phase 2 complete · Phase 3 ready to execute*
+## Success criteria
+
+- [ ] §4: 6 remaining backups tested (nextcloud, semaphore, windmill, supabase, expenseflow, open-notebook)
+- [ ] §5: Supabase password in pass at `infrastructure/presswork-pod/supabase/postgres-password`
+- [ ] §6: SOT updated with all composeIds, scheduleIds
+- [ ] §7: ChromaDB record stored, commits pushed
+
+---
+
+*Last updated: 2026-11-12 · Authentik backup verified · 6 services remaining*
