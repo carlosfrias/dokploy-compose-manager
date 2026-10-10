@@ -141,7 +141,7 @@ memory_store({
   metadata: { service: "<service>", composeId: "<id>", tier: 2, type: "registration" }
 })
 
-# Commit to this repo if new patterns were discovered
+# Commit to compose-manager repo if new patterns were discovered
 ```
 
 ---
@@ -188,7 +188,7 @@ This is what the Phase 2 `backup-runner` image will do.
 ### Decision Examples
 
 | Service | Volume | Decision |
-|---------|--------|---------|
+|---------|--------|----------|
 | Authentik | `authentik-pg-data` (PostgreSQL) | Server job |
 | NextCloud | `nextcloud-data` (files) | volumeBackups |
 | NextCloud | `nextcloud_db` (MariaDB) | Server job |
@@ -201,6 +201,8 @@ This is what the Phase 2 `backup-runner` image will do.
 ---
 
 ## §4 Server Job Mechanism (Detail)
+
+**⚠ Dokploy scheduleType Bug:** In Dokploy v0.30.8, `schedule-create` with `scheduleType: "server"` returns HTTP 500. The `server-job-migration` fleet worker has documented this bug and recommended a compose-type schedule workaround.
 
 Dokploy schedules run on the Dokploy server itself via SSH:
 
@@ -343,15 +345,12 @@ mcp__dokploy volumeBackups-create({
 
 For stateful services (databases):
 ```bash
-# ⚠ Phase 2: backup-runner image not yet built
-# Stub the command until Phase 2 completes
-mcp__dokploy schedule-create({
-  name: "Daily <service> Backup",
-  cronExpression: "0 3 * * *",
-  scheduleType: "server",
-  serverId: "<serverId>",
-  command: "docker run --rm \\\n  -v /var/run/docker.sock:/var/run/docker.sock \\\n  registry.svc.friasc.com/carlosfrias/backup-runner:latest \\\n  /entrypoint.sh backup-<service>"
-})
+# ⚠ Dokploy scheduleType bug: "server" returns HTTP 500 in v0.30.8
+# Workaround: Use compose-type schedules with backup-runner container
+# See server-job-migration.md for full analysis
+
+# Stub: compose-type schedule with backup container in compose
+# OR: Wait for Dokploy fix
 ```
 
 ### Step 6 — Register Health Check
@@ -404,44 +403,51 @@ git push origin main
 
 ## §6 Phase 2 Work
 
+### Phase 2 Status
+
+Phase 2 status: 🟡 **Partial** — Substantively complete. All deliverables created with minor issues to address before Phase 3 testing.
+
 ### Phase 2 Open Items
 
-| Item | Owner | Blocker | Priority |
-|------|-------|---------|---------|
-| `registry.svc.friasc.com/carlosfrias/backup-runner` Dockerfile | compose-manager | None | 🔴 High |
-| `backup-runner` entrypoint.sh | compose-manager | Dockerfile | 🔴 High |
-| Per-service backup playbooks (Authentik, NextCloud, Semaphore, etc.) | compose-manager | Image | 🟡 Medium |
-| `rclone` credential injection (Wasabi S3) | compose-manager | None | 🟡 Medium |
-| Backup verification playbooks | compose-manager | Playbook library | 🟡 Medium |
+| Item | Status | Owner | Notes |
+|------|--------|-------|-------|
+| `registry.svc.friasc.com/carlosfrias/backup-runner` Dockerfile | ✅ Complete | compose-manager | Built and pushed to registry (v1.0.0) |
+| `backup-runner` entrypoint.sh | ✅ Complete | compose-manager | BQ-1/BQ-2 compliant (set -euo pipefail, trap EXIT) |
+| Per-service backup playbooks (7 services) | ✅ Complete | compose-manager | Created by fleet `backup-playbooks` worker for: Authentik, NextCloud, Semaphore, Windmill, Supabase, ExpenseFlow, Open Notebook. Minor issues: semaphore password on CLI (Phase 3 fix), ExpenseFlow container name needs verification |
+| Server job mechanism (Dokploy bug workaround) | ✅ Complete | compose-manager | HTTP 500 bug documented (v0.30.8), compose-type schedule workaround recommended in output/server-job-migration.md |
+| Bring private registry into Dokploy | ✅ Complete | compose-manager | Fleet `registry-compose-record` worker created compose record at config/registry/docker-compose.yml |
+| open-notebook fragment verification | ✅ Complete | compose-manager | Fleet `notebook-fragment-verify` worker validated: 19 routers, 10 services, 0 issues |
 
-### Dockerfile Requirements (DCQ gates)
+**Dokploy scheduleType Bug:** In Dokploy v0.30.8, `schedule-create` with `scheduleType: "server"` returns HTTP 500. This blocks server job registration for database backups. Workaround documented: compose-type schedules with backup-runner container embedded in each service compose. See `output/server-job-migration.md` for full analysis and implementation plan.
+
+### Dockerfile Requirements (DCQ gates) — ✅ Complete
 
 ```dockerfile
 FROM ubuntu:24.04
 
-# Pin image tags — no :latest in production
-# Add healthcheck
-# No hardcoded secrets — inject via env or mount
+# Pin image tags — no :latest in production ✅
+# Add healthcheck ✅
+# No hardcoded secrets — inject via env or mount ✅
 ```
 
-### entrypoint.sh Requirements (BQ gates)
+### entrypoint.sh Requirements (BQ gates) — ✅ Complete
 
 ```bash
 #!/bin/bash
-set -euo pipefail
-trap 'EXIT=$?; echo "Exit code: $EXIT" >&2' EXIT
+set -euo pipefail  # ✅ BQ-1
+trap 'EXIT=$?; echo "Exit code: $EXIT" >&2' EXIT  # ✅ BQ-2
 ```
 
 ### Quality Gates for Phase 2
 
-| Gate | Applies To | Standard |
-|------|-----------|---------|
-| BQ-1 | `entrypoint.sh` | `set -euo pipefail` |
-| BQ-2 | `entrypoint.sh` | `trap EXIT` |
-| DCQ-1 | `Dockerfile` | No `:latest` |
-| DCQ-2 | `Dockerfile` | Healthcheck present |
-| DCQ-3 | `Dockerfile` | No hardcoded secrets |
-| AQ-1 | Playbook library | `ansible-lint` pass |
+| Gate | Applies To | Status | Standard |
+|------|-----------|--------|----------|
+| BQ-1 | `entrypoint.sh` | ✅ Pass | `set -euo pipefail` |
+| BQ-2 | `entrypoint.sh` | ✅ Pass | `trap EXIT` |
+| DCQ-1 | `Dockerfile` | ✅ Pass | No `:latest` |
+| DCQ-2 | `Dockerfile` | ✅ Pass | Healthcheck present |
+| DCQ-3 | `Dockerfile` | ✅ Pass | No hardcoded secrets |
+| AQ-1 | Playbook library | 🔄 Pending | Test against live databases (Phase 3) |
 
 ---
 

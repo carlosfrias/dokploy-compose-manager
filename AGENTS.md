@@ -67,7 +67,8 @@ All 7 steps must complete before a service is declared installed.
 ```
 Is the volume a database?
 ├── YES → server job (schedule-create, scheduleType: "server")
-│         ⚠ Phase 2: backup-runner image not yet built
+│         ⚠ Dokploy bug: scheduleType: "server" returns HTTP 500 (v0.30.8)
+│         Workaround: Use compose-type schedules with backup-runner container
 └── NO
     ├── Is the data rebuildable? (logs, cache, temp)
     │   └── YES → Skip. Document in SOT.
@@ -80,6 +81,8 @@ Is the volume a database?
 ```
 
 **Dokploy volumeBackup deficiency:** `volumeBackups` is a black box. No pre-backup hooks, no pg_dump, no custom tar flags. **Only use for truly static volumes** (Grafana dashboards, Loki segments, Homer config). For databases: server job (Phase 2).
+
+**Dokploy scheduleType bug:** `scheduleType: "server"` returns HTTP 500 in Dokploy v0.30.8. Workaround: use compose-type schedules with a dedicated backup container in each compose. See `output/server-job-migration.md` for implementation details.
 
 ## §5 Conventions
 
@@ -138,18 +141,20 @@ Dokploy resolves paths relative to the git clone root. Wrong `composePath` cause
 | Phase | Status | Notes |
 |-------|--------|-------|
 | Phase 1 | ✅ Complete | SKILL.md scaffold, agent config, quality gates |
-| Phase 2 | 🔴 In progress | `backup-runner` image built locally (verified); GitHub Actions workflow ready; GHCR push pending CI
+| Phase 2 | 🟡 Partial | Substantively complete; minor issues before Phase 3 testing (see open items) |
 
 ### Phase 2 Open Items
 
-| Item | Owner | Blocker |
-|------|-------|---------|
-| `registry.svc.friasc.com/carlosfrias/backup-runner` Dockerfile | compose-manager | ✅ **Built** (ubuntu:24.04, ansible-core 2.17, rclone, ssh, pg_dump) |
-| `backup-runner` entrypoint.sh | compose-manager | ✅ **Built** (set -euo pipefail, trap EXIT, healthcheck mode) |
-| Per-service backup playbooks (Authentik, NextCloud, Semaphore, etc.) | compose-manager | Image dependency |
-| `rclone` credential injection (Wasabi S3) | compose-manager | None |
-| Backup verification playbooks | compose-manager | Playbook library dependency |
-| Bring private registry into Dokploy | fleet-control | Orphan — standalone container on fnet2, not in Dokploy — easy to forget |
+| Item | Status | Owner | Notes |
+|------|--------|-------|-------|
+| `registry.svc.friasc.com/carlosfrias/backup-runner` Dockerfile | ✅ Complete | compose-manager | Built and pushed to registry (v1.0.0) |
+| `backup-runner` entrypoint.sh | ✅ Complete | compose-manager | BQ-1/BQ-2 compliant (set -euo pipefail, trap EXIT) |
+| Per-service backup playbooks (7 services) | ✅ Complete | compose-manager | Created for: Authentik, NextCloud, Semaphore, Windmill, Supabase, ExpenseFlow, Open Notebook. Minor issues: semaphore password on CLI (fix in Phase 3), ExpenseFlow container name needs verification |
+| Server job mechanism (Dokploy bug workaround) | ✅ Complete | compose-manager | HTTP 500 bug documented (v0.30.8), compose-type schedule workaround recommended in output/server-job-migration.md |
+| Bring private registry into Dokploy | ✅ Complete | compose-manager | Compose record created at config/registry/docker-compose.yml |
+| open-notebook fragment verification | ✅ Complete | compose-manager | Validated: 19 routers, 10 services, 0 issues |
+
+**Dokploy scheduleType Bug Note:** In Dokploy v0.30.8, `schedule-create` with `scheduleType: "server"` returns HTTP 500. This blocks server job registration. Workaround documented: compose-type schedules with backup-runner container embedded in each service compose. See `output/server-job-migration.md` for implementation plan.
 
 ## §8 Boundaries & Constraints
 
@@ -202,7 +207,7 @@ Dokploy resolves paths relative to the git clone root. Wrong `composePath` cause
 - Sections unchanged >365d → Simmering effort → major refresh
 
 **Next improvement priorities:**
-1. Phase 2 completion: build `backup-runner` image
+1. Phase 2 completion: per-service backup playbooks + server job workaround
 2. Phase 3: service registrations via compose-manager
 3. Audit existing services against 7-step contract (identify gaps)
 

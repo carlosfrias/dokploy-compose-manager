@@ -1,0 +1,26 @@
+# Private Docker Registry
+# Registry URL: registry.svc.friasc.com (port 5000)
+version: "3.8"
+
+services:
+  registry:
+    image: registry:2
+    container_name: registry
+    ports:
+      - "5000:5000"
+    volumes:
+      - registry-data:/var/lib/registry
+    restart: unless-stopped
+    environment:
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+    labels:
+      # Traefik configuration
+      traefik.enable: "true"
+      traefik.http.routers.registry.entrypoints: "websecure"
+      traefik.http.routers.registry.rule: "Host(`registry.svc.friasc.com`)"
+      traefik.http.routers.registry.tls: "true"
+      traefik.http.services.registry.loadbalancer.server.port: "5000"
+
+volumes:
+  registry-data:
+    name: registry-data
