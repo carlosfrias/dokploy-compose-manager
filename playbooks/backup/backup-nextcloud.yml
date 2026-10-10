@@ -1,0 +1,111 @@
+---
+# backup-nextcloud — Backup NextCloud MariaDB database to Wasabi
+#
+# Purpose: Create a timestamped backup of NextCloud's MariaDB database
+#   running in container `nextcloud-db`. Upload to Wasabi (S3) via rclone.
+#   Retain 7 days locally, 90 days on Wasabi. Verify backup integrity.
+#
+# Usage:
+#   /entrypoint.sh nextcloud
+#   ansible-playbook /runner/playbooks/backup-nextcloud.yml
+#
+# Secrets:
+#   DB password: in compose .env (services/nextcloud/mariadb-password)
+#   Rclone: 'wasabi' remote on fnet2
+#   Config: pass services/wasabi/account/{access-key-id,secret-access-key}
+#
+# DB Details:
+#   Container: nextcloud-db
+#   Database: nextcloud
+#   User: nextcloud (MariaDB user)
+#   Host: localhost (via docker exec on Dokploy host)
+#
+# Tags: backup, nextcloud
+
+- name: "Backup NextCloud MariaDB database"
+  hosts: localhost
+  gather_facts: true
+  tags: [backup, nextcloud]
+
+  vars:
+    # Service identity
+    service_name: "nextcloud"
+    db_container: "nextcloud-db"
+    db_name: "nextcloud"
+    db_user: "nextcloud"
+    db_password: "{{ lookup('community.general.passwordstore', 'infrastructure/nextcloud/db-password') }}"
+
+    # rclone configuration
+    rclone_remote: "wasabi"
+    rclone_bucket: "friasc-backups/nextcloud"
+    rclone_config_dir: "/root/.config/rclone"
+
+    # Retention policy
+    backup_retention_local_days: 7
+    backup_retention_remote_days: 90
+
+    # Paths (container-local /tmp for dump file)
+    local_dump_path: "/tmp/nextcloud-db-{{ backup_timestamp }}.sql.gz"
+
+  tasks:
+    - name: Generate backup timestamp
+      ansible.builtin.set_fact:
+        backup_timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
+
+    - name: Create rclone config directory
+      ansible.builtin.file:
+        path: "{{ rclone_config_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Dump and compress NextCloud MariaDB database
+      community.docker.docker_container_exec:
+        container: "{{ db_container }}"
+        command: >-
+          mysqldump -u {{ db_user }} --single-transaction
+          --quick --lock-tables=false {{ db_name }} | gzip
+      environment:
+        MYSQL_PWD: "{{ db_password }}"
+      register: _mysqldump_result
+      changed_when: true
+
+    - name: Save compressed dump to /tmp
+      ansible.builtin.copy:
+        content: "{{ _mysqldump_result.stdout }}"
+        dest: "{{ local_dump_path }}"
+        mode: "0600"
+
+    - name: Upload to Wasabi
+      ansible.builtin.include_role:
+        name: friasc.fleet_control_backup.backup_wasabi
+      vars:
+        backup_wasabi_source_file: "{{ local_dump_path }}"
+        backup_wasabi_rclone_bucket: "{{ rclone_bucket }}"
+        backup_wasabi_rclone_remote: "{{ rclone_remote }}"
+        backup_wasabi_retention_local_days: "{{ backup_retention_local_days }}"
+        backup_wasabi_retention_remote_days: "{{ backup_retention_remote_days }}"
+        backup_wasabi_healthchecks_slug: "backup-nextcloud"
+        backup_wasabi_service_name: "{{ service_name }}"
+
+    - name: Clean up /tmp dump file
+      ansible.builtin.file:
+        path: "{{ local_dump_path }}"
+        state: absent
+      changed_when: true
+
+- name: "Verify NextCloud backup integrity"
+  hosts: localhost
+  gather_facts: false
+  tags: [verify, nextcloud]
+
+  tasks:
+    - name: Verify latest NextCloud backup on Wasabi
+      ansible.builtin.include_role:
+        name: friasc.fleet_control_backup.verify_backup
+      vars:
+        verify_backup_service_name: "NextCloud DB"
+        verify_backup_pattern: "nextcloud-db-*.sql.gz"
+        verify_backup_rclone_remote: "wasabi"
+        verify_backup_rclone_bucket: "{{ rclone_bucket }}"
+        verify_backup_max_age_hours: 24
+        verify_backup_ac_id: "NC-BAK-04a"

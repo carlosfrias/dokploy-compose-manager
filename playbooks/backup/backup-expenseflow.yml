@@ -1,0 +1,114 @@
+---
+# backup-expenseflow — Backup ExpenseFlow PostgreSQL database to Wasabi
+#
+# Purpose: Create a timestamped backup of ExpenseFlow's PostgreSQL database
+#   running in container `postgres`. Upload to Wasabi (S3) via rclone.
+#   Retain 7 days locally, 90 days on Wasabi. Verify backup integrity.
+#
+# Usage:
+#   /entrypoint.sh expenseflow
+#   ansible-playbook /runner/playbooks/backup-expenseflow.yml
+#
+# Secrets:
+#   DB password: in compose .env (services/expenseflow/postgres-password)
+#   Rclone: 'wasabi' remote on fnet2
+#   Config: pass services/wasabi/account/{access-key-id,secret-access-key}
+#
+# DB Details:
+#   Container: postgres (service name in docker-compose.yml)
+#   Database: expenseflow (POSTGRES_DB default)
+#   User: expenseflow (POSTGRES_USER default)
+#   Host: localhost (via docker exec on Dokploy host)
+#
+# Note: The postgres container name comes from the docker-compose service name.
+#   If the compose file changes (e.g., renamed to expenseflow-postgres), update
+#   db_container accordingly.
+#
+# Tags: backup, expenseflow
+
+- name: "Backup ExpenseFlow PostgreSQL database"
+  hosts: localhost
+  gather_facts: true
+  tags: [backup, expenseflow]
+
+  vars:
+    # Service identity
+    service_name: "expenseflow"
+    db_container: "postgres"
+    db_name: "expenseflow"
+    db_user: "expenseflow"
+    db_password: "{{ lookup('community.general.passwordstore', 'infrastructure/fleet/expenseflow/db-password') }}"
+
+    # rclone configuration
+    rclone_remote: "wasabi"
+    rclone_bucket: "friasc-backups/expenseflow"
+    rclone_config_dir: "/root/.config/rclone"
+
+    # Retention policy
+    backup_retention_local_days: 7
+    backup_retention_remote_days: 90
+
+    # Paths (container-local /tmp for dump file)
+    local_dump_path: "/tmp/expenseflow-db-{{ backup_timestamp }}.sql.gz"
+
+  tasks:
+    - name: Generate backup timestamp
+      ansible.builtin.set_fact:
+        backup_timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
+
+    - name: Create rclone config directory
+      ansible.builtin.file:
+        path: "{{ rclone_config_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Dump and compress ExpenseFlow PostgreSQL database
+      community.docker.docker_container_exec:
+        container: "{{ db_container }}"
+        command: >-
+          pg_dump -U {{ db_user }} -d {{ db_name }} --no-owner --no-acl | gzip
+      environment:
+        PGPASSWORD: "{{ db_password }}"
+      register: _pg_dump_result
+      changed_when: true
+
+    - name: Save compressed dump to /tmp
+      ansible.builtin.copy:
+        content: "{{ _pg_dump_result.stdout }}"
+        dest: "{{ local_dump_path }}"
+        mode: "0600"
+
+    - name: Upload to Wasabi
+      ansible.builtin.include_role:
+        name: friasc.fleet_control_backup.backup_wasabi
+      vars:
+        backup_wasabi_source_file: "{{ local_dump_path }}"
+        backup_wasabi_rclone_bucket: "{{ rclone_bucket }}"
+        backup_wasabi_rclone_remote: "{{ rclone_remote }}"
+        backup_wasabi_retention_local_days: "{{ backup_retention_local_days }}"
+        backup_wasabi_retention_remote_days: "{{ backup_retention_remote_days }}"
+        backup_wasabi_healthchecks_slug: "backup-expenseflow"
+        backup_wasabi_service_name: "{{ service_name }}"
+
+    - name: Clean up /tmp dump file
+      ansible.builtin.file:
+        path: "{{ local_dump_path }}"
+        state: absent
+      changed_when: true
+
+- name: "Verify ExpenseFlow backup integrity"
+  hosts: localhost
+  gather_facts: false
+  tags: [verify, expenseflow]
+
+  tasks:
+    - name: Verify latest ExpenseFlow backup on Wasabi
+      ansible.builtin.include_role:
+        name: friasc.fleet_control_backup.verify_backup
+      vars:
+        verify_backup_service_name: "ExpenseFlow DB"
+        verify_backup_pattern: "expenseflow-db-*.sql.gz"
+        verify_backup_rclone_remote: "wasabi"
+        verify_backup_rclone_bucket: "{{ rclone_bucket }}"
+        verify_backup_max_age_hours: 24
+        verify_backup_ac_id: "EF-BAK-04a"

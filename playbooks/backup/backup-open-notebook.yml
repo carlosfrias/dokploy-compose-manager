@@ -1,0 +1,171 @@
+---
+# backup-open-notebook — Backup Open Notebook SurrealDB to Wasabi
+#
+# Purpose: Create a timestamped backup of Open Notebook's SurrealDB database
+#   running in container `surrealdb`. Uses SurrealDB's KVREST API (port 8000)
+#   to export the database. Upload to Wasabi (S3) via rclone.
+#   Retain 7 days locally, 90 days on Wasabi. Verify backup integrity.
+#
+# Usage:
+#   /entrypoint.sh open-notebook
+#   ansible-playbook /runner/playbooks/backup-open-notebook.yml
+#
+# Secrets:
+#   Rclone: 'wasabi' remote on fnet2
+#   Config: pass services/wasabi/account/{access-key-id,secret-access-key}
+#   SurrealDB auth: root/root (default credentials from docker-compose.yml)
+#   SurrealDB namespace: open_notebook
+#   SurrealDB database: open_notebook_user1 (per-user DB)
+#
+# DB Details:
+#   Container: surrealdb
+#   API endpoint: http://surrealdb:8000 (internal Docker network)
+#   KVREST port: 8000
+#   Database: open_notebook (or default)
+#   User: root
+#
+# SurrealDB Export API:
+#   - Status: GET /status
+#   - Export: GET /export (returns full NS/DBS export as JSON)
+#   - Namespace: use X-Surreal-NS header or default "open_notebook"
+#   - Database: use X-Surreal-DB header or default "open_notebook"
+#
+# Networking Note:
+#   This playbook uses curl from within the backup-runner container to reach
+#   the SurrealDB container via Docker's internal network. This requires:
+#   - backup-runner and surrealdb are on the same Docker network, OR
+#   - surrealdb has port 8000 exposed to the host, OR
+#   - running as a sidecar with network_mode: "container:surrealdb"
+#
+#   If the backup fails with "Failed to connect", verify Docker networking.
+#
+# Tags: backup, open-notebook, surrealdb
+
+- name: "Backup Open Notebook SurrealDB"
+  hosts: localhost
+  gather_facts: true
+  tags: [backup, open-notebook, surrealdb]
+
+  vars:
+    # Service identity
+    service_name: "open-notebook"
+    surrealdb_container: "surrealdb"
+    surrealdb_host: "surrealdb"
+    surrealdb_port: "8000"
+    surrealdb_user: "root"
+    surrealdb_user: "root"
+    surrealdb_password: "root"
+    surrealdb_namespace: "open_notebook"
+    surrealdb_namespace: "open_notebook"
+    surrealdb_database: "open_notebook"
+
+    # rclone configuration
+    rclone_remote: "wasabi"
+    rclone_bucket: "friasc-backups/open-notebook"
+    rclone_config_dir: "/root/.config/rclone"
+
+    # Retention policy
+    backup_retention_local_days: 7
+    backup_retention_remote_days: 90
+
+    # Paths (container-local /tmp for dump file)
+    local_dump_path: "/tmp/open-notebook-db-{{ backup_timestamp }}.json.gz"
+
+    # SurrealDB API
+    surrealdb_status_url: "http://{{ surrealdb_host }}:{{ surrealdb_port }}/status"
+    surrealdb_export_url: "http://{{ surrealdb_host }}:{{ surrealdb_port }}/export"
+
+  tasks:
+    - name: Generate backup timestamp
+      ansible.builtin.set_fact:
+        backup_timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
+
+    - name: Create rclone config directory
+      ansible.builtin.file:
+        path: "{{ rclone_config_dir }}"
+        state: directory
+        mode: "0700"
+
+    # Note: This uses ansible.builtin.uri/curl from within the backup-runner
+    # container. It requires Docker networking to reach surrealdb:8000.
+    # Alternative: use community.docker.docker_container_exec to run curl
+    # inside the surrealdb container itself.
+    - name: Verify SurrealDB is accessible
+      ansible.builtin.uri:
+        url: "{{ surrealdb_status_url }}"
+        method: GET
+        timeout: 10
+        return_content: true
+      register: _surrealdb_status
+      failed_when: false
+
+    - name: Set SurrealDB status fact
+      ansible.builtin.set_fact:
+        surrealdb_available: "{{ _surrealdb_status.status | default(0) == 200 }}"
+
+    - name: Fail if SurrealDB is not accessible
+      ansible.builtin.fail:
+        msg: "SurrealDB is not accessible at {{ surrealdb_status_url }}. Verify Docker networking: backup-runner and surrealdb must be on the same Docker network."
+      when: not surrealdb_available | bool
+
+    # Use curl with authentication via -u flag (user:password).
+    # The export API returns JSON which we gzip and save.
+    - name: Export SurrealDB database via curl
+      ansible.builtin.shell:
+        cmd: |
+          curl -s -X GET "http://{{ surrealdb_host }}:{{ surrealdb_port }}/export" \
+            -H "Accept: application/json" \
+            -H "X-Surreal-NS: {{ surrealdb_namespace }}" \
+            -H "X-Surreal-DB: {{ surrealdb_database }}" \
+            -u "{{ surrealdb_user }}:{{ surrealdb_password }}" \
+            | gzip -c > {{ local_dump_path }}
+        executable: /bin/bash
+        creates: "{{ local_dump_path }}"
+      register: _curl_export
+      changed_when: true
+      timeout: 300
+
+    - name: Check export file exists and has content
+      ansible.builtin.stat:
+        path: "{{ local_dump_path }}"
+      register: _dump_stat
+
+    - name: Fail if export file was not created
+      ansible.builtin.fail:
+        msg: "Failed to create SurrealDB export at {{ local_dump_path }}"
+      when: not (_dump_stat.stat.exists | default(false) | bool) or (_dump_stat.stat.size | default(0) == 0)
+
+    - name: Upload to Wasabi
+      ansible.builtin.include_role:
+        name: friasc.fleet_control_backup.backup_wasabi
+      vars:
+        backup_wasabi_source_file: "{{ local_dump_path }}"
+        backup_wasabi_rclone_bucket: "{{ rclone_bucket }}"
+        backup_wasabi_rclone_remote: "{{ rclone_remote }}"
+        backup_wasabi_retention_local_days: "{{ backup_retention_local_days }}"
+        backup_wasabi_retention_remote_days: "{{ backup_retention_remote_days }}"
+        backup_wasabi_healthchecks_slug: "backup-open-notebook"
+        backup_wasabi_service_name: "{{ service_name }}"
+
+    - name: Clean up /tmp dump file
+      ansible.builtin.file:
+        path: "{{ local_dump_path }}"
+        state: absent
+      changed_when: true
+
+- name: "Verify Open Notebook backup integrity"
+  hosts: localhost
+  gather_facts: false
+  tags: [verify, open-notebook, surrealdb]
+
+  tasks:
+    - name: Verify latest Open Notebook backup on Wasabi
+      ansible.builtin.include_role:
+        name: friasc.fleet_control_backup.verify_backup
+      vars:
+        verify_backup_service_name: "Open Notebook SurrealDB"
+        verify_backup_pattern: "open-notebook-db-*.json.gz"
+        verify_backup_rclone_remote: "wasabi"
+        verify_backup_rclone_bucket: "{{ rclone_bucket }}"
+        verify_backup_max_age_hours: 24
+        verify_backup_ac_id: "ONB-BAK-04a"

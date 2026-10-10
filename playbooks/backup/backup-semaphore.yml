@@ -1,0 +1,135 @@
+---
+# backup-semaphore — Backup Semaphore MySQL database to Wasabi
+#
+# Purpose: Create a timestamped backup of Semaphore's MySQL database
+#   running in container `semaphore-mysql`. Upload to Wasabi (S3) via rclone.
+#   Retain 7 days locally, 90 days on Wasabi. Verify backup integrity.
+#
+# Usage:
+#   /entrypoint.sh semaphore
+#   ansible-playbook /runner/playbooks/backup-semaphore.yml
+#
+# Secrets:
+#   DB password: pass services/semaphore/mysql-password
+#   Rclone: 'wasabi' remote on fnet2
+#   Config: pass services/wasabi/account/{access-key-id,secret-access-key}
+#
+# DB Details:
+#   Container: semaphore-mysql
+#   Database: semaphore
+#   User: root (default MySQL root)
+#   Host: localhost (via docker exec on Dokploy host)
+#
+# Tags: backup, semaphore
+
+- name: "Backup Semaphore MySQL database"
+  hosts: localhost
+  gather_facts: true
+  tags: [backup, semaphore]
+
+  vars:
+    # Service identity
+    service_name: "semaphore"
+    db_container: "semaphore-mysql"
+    db_name: "semaphore"
+    db_user: "root"
+    db_password: "{{ lookup('community.general.passwordstore', 'infrastructure/fleet/semaphore/db-password') }}"
+
+    # rclone configuration
+    rclone_remote: "wasabi"
+    rclone_bucket: "friasc-backups/semaphore"
+    rclone_config_dir: "/root/.config/rclone"
+
+    # Retention policy
+    backup_retention_local_days: 7
+    backup_retention_remote_days: 90
+
+    # Paths (container-local /tmp for dump file)
+    local_dump_path: "/tmp/semaphore-db-{{ backup_timestamp }}.sql.gz"
+
+  tasks:
+    - name: Generate backup timestamp
+      ansible.builtin.set_fact:
+        backup_timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
+
+    - name: Create rclone config directory
+      ansible.builtin.file:
+        path: "{{ rclone_config_dir }}"
+        state: directory
+        mode: "0700"
+
+    # Use MYSQL_PWD environment variable instead of -p flag to avoid
+    # password visible in process list. This is the recommended approach
+    # per MySQL documentation for scripted operations.
+    - name: "Dump Semaphore MySQL database"
+      community.docker.docker_container_exec:
+        container: "{{ db_container }}"
+        command: >-
+          mysqldump -u {{ db_user }} --single-transaction
+          --quick --lock-tables=false {{ db_name }}
+        env:
+          MYSQL_PWD: "{{ db_password }}"
+      register: _mysqldump_result
+      changed_when: true
+
+    - name: "Compress and write dump to /tmp"
+      ansible.builtin.copy:
+        content: "{{ _mysqldump_result.stdout | default('') | string }}"
+        dest: "{{ local_dump_path }}"
+        mode: "0600"
+
+    - name: "Gzip the dump file"
+      ansible.builtin.shell:
+        cmd: "gzip -f {{ local_dump_path }}"
+        creates: "{{ local_dump_path }}.gz"
+      changed_when: true
+
+    # Update path after gzip
+    - name: Set compressed dump path
+      ansible.builtin.set_fact:
+        compressed_dump_path: "{{ local_dump_path }}.gz"
+
+    - name: Verify compressed file exists
+      ansible.builtin.stat:
+        path: "{{ compressed_dump_path }}"
+      register: _stat_result
+
+    - name: Fail if compressed file missing
+      ansible.builtin.fail:
+        msg: "Compressed dump file not found at {{ compressed_dump_path }}"
+      when: not (_stat_result.stat.exists | default(false) | bool)
+
+    - name: Upload to Wasabi
+      ansible.builtin.include_role:
+        name: friasc.fleet_control_backup.backup_wasabi
+      vars:
+        backup_wasabi_source_file: "{{ compressed_dump_path }}"
+        backup_wasabi_rclone_bucket: "{{ rclone_bucket }}"
+        backup_wasabi_rclone_remote: "{{ rclone_remote }}"
+        backup_wasabi_retention_local_days: "{{ backup_retention_local_days }}"
+        backup_wasabi_retention_remote_days: "{{ backup_retention_remote_days }}"
+        backup_wasabi_healthchecks_slug: "backup-semaphore"
+        backup_wasabi_service_name: "{{ service_name }}"
+
+    - name: Clean up /tmp dump file
+      ansible.builtin.file:
+        path: "{{ compressed_dump_path }}"
+        state: absent
+      changed_when: true
+
+- name: "Verify Semaphore backup integrity"
+  hosts: localhost
+  gather_facts: false
+  tags: [verify, semaphore]
+
+  tasks:
+    - name: Verify latest Semaphore backup on Wasabi
+      ansible.builtin.include_role:
+        name: friasc.fleet_control_backup.verify_backup
+      vars:
+        verify_backup_service_name: "Semaphore DB"
+        verify_backup_pattern: "semaphore-db-*.sql.gz"
+        verify_backup_rclone_remote: "wasabi"
+        verify_backup_rclone_bucket: "{{ rclone_bucket }}"
+        verify_backup_max_age_hours: 24
+        verify_backup_ac_id: "SEM-BAK-04a"

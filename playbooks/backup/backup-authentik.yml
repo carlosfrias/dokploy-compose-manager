@@ -1,0 +1,110 @@
+---
+# backup-authentik — Backup Authentik PostgreSQL database to Wasabi
+#
+# Purpose: Create a timestamped backup of Authentik's PostgreSQL database
+#   running in container `authentik-postgresql`. Upload to Wasabi (S3) via rclone.
+#   Retain 7 days locally, 90 days on Wasabi. Verify backup integrity.
+#
+# Usage:
+#   /entrypoint.sh authentik
+#   ansible-playbook /runner/playbooks/backup-authentik.yml
+#
+# Secrets:
+#   DB password: pass infrastructure/fleet/authentik/postgres-password
+#   Rclone: 'wasabi' remote on fnet2
+#   Config: pass services/wasabi/account/{access-key-id,secret-access-key}
+#
+# DB Details:
+#   Container: authentik-postgresql
+#   Database: authentik
+#   User: authentik
+#   Host: localhost (via docker exec on Dokploy host)
+#
+# Tags: backup, authentik
+
+- name: "Backup Authentik PostgreSQL database"
+  hosts: localhost
+  gather_facts: true
+  tags: [backup, authentik]
+
+  vars:
+    # Service identity
+    service_name: "authentik"
+    db_container: "authentik-postgresql"
+    db_name: "authentik"
+    db_user: "authentik"
+    db_password: "{{ lookup('community.general.passwordstore', 'infrastructure/fleet/authentik/postgres-password') }}"
+
+    # rclone configuration
+    rclone_remote: "wasabi"
+    rclone_bucket: "friasc-backups/authentik"
+    rclone_config_dir: "/root/.config/rclone"
+
+    # Retention policy
+    backup_retention_local_days: 7
+    backup_retention_remote_days: 90
+
+    # Paths (container-local /tmp for dump file)
+    local_dump_path: "/tmp/authentik-db-{{ backup_timestamp }}.sql.gz"
+
+  tasks:
+    - name: Generate backup timestamp
+      ansible.builtin.set_fact:
+        backup_timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
+
+    - name: Create rclone config directory
+      ansible.builtin.file:
+        path: "{{ rclone_config_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Dump and compress Authentik PostgreSQL database
+      community.docker.docker_container_exec:
+        container: "{{ db_container }}"
+        command: >-
+          pg_dump -U {{ db_user }} -d {{ db_name }} | gzip
+      environment:
+        PGPASSWORD: "{{ db_password }}"
+      register: _pg_dump_result
+      changed_when: true
+
+    - name: Save compressed dump to /tmp
+      ansible.builtin.copy:
+        content: "{{ _pg_dump_result.stdout }}"
+        dest: "{{ local_dump_path }}"
+        mode: "0600"
+
+    - name: Upload to Wasabi
+      ansible.builtin.include_role:
+        name: friasc.fleet_control_backup.backup_wasabi
+      vars:
+        backup_wasabi_source_file: "{{ local_dump_path }}"
+        backup_wasabi_rclone_bucket: "{{ rclone_bucket }}"
+        backup_wasabi_rclone_remote: "{{ rclone_remote }}"
+        backup_wasabi_retention_local_days: "{{ backup_retention_local_days }}"
+        backup_wasabi_retention_remote_days: "{{ backup_retention_remote_days }}"
+        backup_wasabi_healthchecks_slug: "backup-authentik"
+        backup_wasabi_service_name: "{{ service_name }}"
+
+    - name: Clean up /tmp dump file
+      ansible.builtin.file:
+        path: "{{ local_dump_path }}"
+        state: absent
+      changed_when: true
+
+- name: "Verify Authentik backup integrity"
+  hosts: localhost
+  gather_facts: false
+  tags: [verify, authentik]
+
+  tasks:
+    - name: Verify latest Authentik backup on Wasabi
+      ansible.builtin.include_role:
+        name: friasc.fleet_control_backup.verify_backup
+      vars:
+        verify_backup_service_name: "Authentik DB"
+        verify_backup_pattern: "authentik-db-*.sql.gz"
+        verify_backup_rclone_remote: "wasabi"
+        verify_backup_rclone_bucket: "{{ rclone_bucket }}"
+        verify_backup_max_age_hours: 24
+        verify_backup_ac_id: "AC-BAK-04a"
