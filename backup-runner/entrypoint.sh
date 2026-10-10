@@ -72,7 +72,8 @@ healthcheck() {
 
     # Verify SSH can reach at least one fleet node
     # (fnet2 Dokploy primary — will fail auth without keys, but connection works)
-    if timeout 5 ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no \
+    if timeout 5 ssh -F /dev/null -o ConnectTimeout=3 -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
         friasc@192.168.0.142 'echo pong' >/dev/null 2>&1; then
         info "SSH connectivity: OK"
     else
@@ -103,6 +104,8 @@ validate_environment() {
     export ANSIBLE_HOST_KEY_CHECKING="${ANSIBLE_HOST_KEY_CHECKING:-no}"
     export ANSIBLE_PRIVATE_KEY_FILE="${ANSIBLE_PRIVATE_KEY_FILE:-/root/.ssh/id_rsa}"
     export ANSIBLE_SCP_IF_SSH="${ANSIBLE_SCP_IF_SSH:-y}"
+    # Skip SSH config file to avoid permission/ownership issues when mounted from host
+    export ANSIBLE_SSH_ARGS="${ANSIBLE_SSH_ARGS:--F /dev/null}"
     export PYTHONUNBUFFERED=1
 
     info "Environment validated"
@@ -134,6 +137,15 @@ run_playbook() {
     return 0
 }
 
+# ── Idle mode (sleep forever) ────────────────────────────────────────────────────
+# Used by backup-jobs compose containers that wait for docker exec from Dokploy schedules.
+idle() {
+    info "Idle mode — sleeping forever until docker exec"
+    # Block forever. docker exec <container> /entrypoint.sh <service>
+    # will interrupt the sleep and invoke main with $1 = service name.
+    sleep infinity
+}
+
 # ── Main ──────────────────────────────────────────────────────────────────
 main() {
     local command="${1:-}"
@@ -142,8 +154,11 @@ main() {
         healthcheck)
             healthcheck
             ;;
+        infinity|sleep)
+            idle
+            ;;
         "")
-            fatal "No command specified. Usage: /entrypoint.sh <service|healthcheck>"
+            fatal "No command specified. Usage: /entrypoint.sh <service|healthcheck|infinity>"
             ;;
         *)
             SERVICE="${command}"

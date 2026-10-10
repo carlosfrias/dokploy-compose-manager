@@ -1,86 +1,46 @@
-# backup-runner — Ansible runner image for Dokploy server jobs
-#
-# Purpose: Runs Ansible playbooks inside Dokploy's schedule execution context.
-#   Called by: docker run --rm registry.svc.friasc.com/carlosfrias/backup-runner:latest /entrypoint.sh <service>
-#   Execution: Dokploy server job SSHs to target → runs script.sh → docker run backup-runner
-#   Docker socket mount gives access to host containers for db dumps.
-#
-# Quality gates: DCQ-1 (no :latest), DCQ-2 (healthcheck), DCQ-3 (no hardcoded secrets)
-#
-# Registry: registry.svc.friasc.com/carlosfrias/backup-runner
-# Tags: 1.0.0, latest
-# Push:  docker --context=fnet2 buildx build --platform linux/amd64 -t registry.svc.friasc.com/carlosfrias/backup-runner:1.0.0 --push ./backup-runner
-#
-# Dependencies:
-#   - Base: Ubuntu 24.04 LTS (Noble)
-#   - ansible-core 2.17, ansible-runner 2.3
-#   - Tools: openssh-client, rclone, curl, jq, postgresql-client, mariadb-client
-#
-# Credentials: Injected at runtime via mount. Never hardcoded in this image.
-#
-# Architecture: amd64 only (fleet nodes are Intel/AMD)
-#   To add arm64: append --platform linux/arm64 and tag with -arm64 suffix
+FROM alpine:3.20
 
-FROM ubuntu:24.04
-
-ENV DEBIAN_FRONTEND=noninteractive
-
-# ── Install runtime dependencies ───────────────────────────────────────────────
-# Combined into one layer for efficiency.
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        # Python + build tools for Ansible
+# ── APK packages ────────────────────────────────────────────────────────────────
+RUN apk add --no-cache \
         python3 \
-        python3-pip \
-        python3-dev \
-        build-essential \
-        libffi-dev \
-        libssl-dev \
-        libyaml-dev \
-        libonig-dev \
-        # SSH client for Ansible to connect to fleet nodes
-        openssh-client \
-        # S3 sync for Wasabi backups
-        rclone \
-        # HTTP client for healthcheck pings
-        curl \
-        # JSON processor
-        jq \
-        # Database CLIs for dumps
-        postgresql-client \
-        mariadb-client \
-        # Archive tools
+        py3-pip \
         bash \
+        openssh-client \
+        rsync \
+        curl \
         tar \
         gzip \
+        postgresql-client \
+        mariadb-client \
+        pass \
+        gnupg \
+        jq \
+        rclone \
         findutils \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/cache/apk/* /tmp/*
 
-# ── Install Ansible ──────────────────────────────────────────────────────────
-# ansible-runner not in Ubuntu repos; install via pip.
-# --break-system-packages: Ubuntu 24.04 PEP 668 externally-managed-environment
-RUN pip3 install --break-system-packages --no-cache-dir --no-build-isolation \
-        ansible-core==2.17.* \
-        ansible-runner==2.3.* \
-        ansible-lint==6.* \
-        ansible-navigator==1.* \
-    && rm -rf /root/.cache/pip/*
+# ── Ansible + collections ────────────────────────────────────────────────────────
+RUN pip3 install --no-cache-dir --break-system-packages \
+        ansible \
+        ansible-core \
+    && rm -rf /root/.cache/*
 
-# ── Copy entrypoint ──────────────────────────────────────────────────────────
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+# ── Remove old community.docker (apk version) and install fresh ─────────────────
+# apk version (v3.9.0) doesn't register http+docker:// URL scheme properly
+RUN rm -rf /usr/lib/python3.12/site-packages/ansible_collections/community/docker \
+ && ansible-galaxy collection install community.docker \
+ && rm -rf /root/.ansible/tmp/*
 
-# ── Healthcheck ──────────────────────────────────────────────────────────────
-# DCQ-2: Confirms container is functional before serving requests
-HEALTHCHECK --interval=60s --timeout=10s --start-period=5s --retries=3 \
-    CMD /entrypoint.sh healthcheck || exit 1
+# ── Python deps: docker SDK + requests (for Ansible community.docker) ─────────────
+COPY install_python_deps.py /tmp/install_python_deps.py
+RUN python3 /tmp/install_python_deps.py \
+ && rm -f /tmp/install_python_deps.py /tmp/*.whl /tmp/*.json
 
-# ── Runtime configuration ───────────────────────────────────────────────────
-WORKDIR /runner
-ENTRYPOINT ["/entrypoint.sh"]
+# ── Startup script ───────────────────────────────────────────────────────────────
+COPY startup.sh /startup.sh
+COPY ansible.cfg /etc/ansible/ansible.cfg
+RUN chmod +x /startup.sh
 
-# ── Labels ───────────────────────────────────────────────────────────────────
-LABEL org.opencontainers.image.title="fleet-control backup-runner"
-LABEL org.opencontainers.image.description="Ansible runner for Dokploy server job backups"
-LABEL org.opencontainers.image.source="https://github.com/carlosfrias/dokploy-compose-manager"
-LABEL org.opencontainers.image.version="1.0.0"
+# Override Alpine's default CMD [/bin/sh]
+CMD []
+ENTRYPOINT ["/startup.sh"]
