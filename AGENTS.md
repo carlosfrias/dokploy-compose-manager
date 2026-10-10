@@ -138,14 +138,14 @@ Dokploy resolves paths relative to the git clone root. Wrong `composePath` cause
 | Phase | Status | Notes |
 |-------|--------|-------|
 | Phase 1 | ✅ Complete | SKILL.md scaffold, agent config, quality gates |
-| Phase 2 | ⚠️ TODO | `backup-runner` image not built; server jobs stubbed |
+| Phase 2 | 🔴 In progress | `backup-runner` image built locally (verified); GitHub Actions workflow ready; GHCR push pending CI
 
 ### Phase 2 Open Items
 
 | Item | Owner | Blocker |
 |------|-------|---------|
-| `ghcr.io/carlosfrias/backup-runner` Dockerfile | compose-manager | None — can start now |
-| `backup-runner` entrypoint.sh | compose-manager | Dockerfile dependency |
+| `ghcr.io/carlosfrias/backup-runner` Dockerfile | compose-manager | ✅ **Built** (ubuntu:24.04, ansible-core 2.17, rclone, ssh, pg_dump) |
+| `backup-runner` entrypoint.sh | compose-manager | ✅ **Built** (set -euo pipefail, trap EXIT, healthcheck mode) |
 | Per-service backup playbooks (Authentik, NextCloud, Semaphore, etc.) | compose-manager | Image dependency |
 | `rclone` credential injection (Wasabi S3) | compose-manager | None |
 | Backup verification playbooks | compose-manager | Playbook library dependency |
