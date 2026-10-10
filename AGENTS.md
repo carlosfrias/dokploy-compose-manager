@@ -104,8 +104,30 @@ Dokploy resolves paths relative to the git clone root. Wrong `composePath` cause
 ### Credential Convention
 
 - Use `pass show <path>` to retrieve secrets — never hardcode values
-- Naming: `<domain>/<service>/<purpose>` (IR-7, e.g., `infrastructure/windmill/postgres-password`)
+- Naming: `<domain>/<service>/<purpose>` (IR-7, e.g., `infrastructure/windmill/db-password`)
 - Short-lived tokens belong in the service's environment — mint from refresh tokens in `pass`
+
+### Backup Runner Conventions (from Phase 3)
+
+**Known container names (verify before every backup run — Dokploy adds random prefixes):**
+
+| Service | Host | Container Name |
+|---------|------|---------------|
+| authentik | fnet2 | `authentik-postgresql-1` |
+| windmill | fnet2 | `windmill-ztuswo-windmill_db-1` |
+| nextcloud | fnet1 | `nextcloud-ijgeuz-nextcloud-db-1` |
+| supabase | fnet3 | `supabase-db` |
+| expenseflow | fnet5 | `expenseflow-postgres-1` |
+| semaphore | fnet7 | `compose-program-neural-circuit-hguc18-mysql-1` |
+| open-notebook | fnet7 | N/A (bind mount at `/home/friasc/open-notebook/surreal_data`) |
+
+**Cross-host backup architecture:**
+- backup-runner containers run on fnet2 but **cannot SSH to other hosts** (network isolation)
+- Backups execute via **Mac orchestrator** using fleet-control inventory SSH
+- Pass store must be synced to Mac (`pass insert -m <path> <<< "$(ssh fnet2 'pass <path>')"`)
+- SurrealDB backed up via **RocksDB bind mount tar** (minimal image, no shell)
+
+**Semaphore MySQL:** MySQL root has random password — use `semaphore` user instead.
 
 ## §6 Quality Standards
 
@@ -200,11 +222,13 @@ Dokploy resolves paths relative to the git clone root. Wrong `composePath` cause
 | Full skill (MCP tables, Assess/Register/Verify loop) | `AGENTS-DEEP.md` |
 | Architecture diagrams | `ARCHITECTURE.md` |
 | Phase 2 work | `AGENTS-DEEP.md` § Phase 2 Work |
+| Phase 3 discoveries | `AGENTS.md` § Backup Runner Conventions |
 | Dokploy effort | `Efforts/Infrastructure/dokploy/AGENTS.md` |
 | MCP tools | `mcp__dokploy` (604 tools) |
 | SSH key | `R7VQAMIqCoLqs2E3rr1ff` (Dokploy deploy key) |
 | API key | `pass infrastructure/dokploy/api-key` |
-| SOT | `fleet-orchestration/fleet-control/config/playbook-index.json` |
+| SOT | `fleet-orchestration/fleet-control/playbook-index.json` |
+| Backup playbooks | `dokploy-config/backup-jobs/playbooks/` (canonical) |
 
 ## §10 Self-Improvement
 

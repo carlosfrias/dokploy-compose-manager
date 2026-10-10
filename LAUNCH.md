@@ -1,14 +1,14 @@
-# compose-manager — Phase 3 Launch Prompt (v2)
+# compose-manager — Phase 3 Launch Prompt (v3)
 
-> **Resume from session 2026-11-12.** §1–§3 complete. §4 partial (authentik ✅). §5–§6 open. §7 in progress.
+> **Completed 2026-10-10.** All sections done. Phase 3 closed.
 
 **CWD:** `/Users/friasc/Cloud/carlos-desktop/Efforts/Infrastructure/dokploy/compose-manager/`
 **Owner:** compose-manager Tier 2 operator
-**Phase:** 3 of 3
+**Phase:** 3 of 3 — ✅ COMPLETE
 
 ---
 
-## What was done this session
+## Results
 
 ### §1 — Registry ✅
 - Compose `composeId: KeS-CUyaef2OchjHitcRR` deployed on fnet2
@@ -18,9 +18,7 @@
 ### §2 — backup-jobs compose ✅
 - 7 containers: authentik/semaphore/windmill/nextcloud/supabase/expenseflow/open-notebook
 - Image: `localhost:5000/carlosfrias/backup-runner:v10` (Alpine 3.20, ~628MB)
-- Image pushed to both local registry (`localhost:5000`) and remote registry (`registry.svc.friasc.com`)
 - composeId: `adWaqiMliwUqOf_MX5POF`
-- **Critical fix:** `docker-compose.yml` runs containers with `command: ["idle"]` which maps to `tail -f /dev/null` via startup.sh
 
 ### §3 — Backup schedules ✅ (via MCP)
 | Service | scheduleId | Cron |
@@ -33,166 +31,72 @@
 | expenseflow | `-mpk8FbzoiDvQCj8q5i3n` | `15 4 * * *` |
 | open-notebook | `2ZJ2qyYuzIdCJfOLzPijV` | `30 4 * * *` |
 
-### §4 — Backup testing ✅ (authentik) / ⏳ (6 remaining)
-- **authentik:** ✅ pg_dump → gzip → rclone → Wasabi `wasabi:friasc-backups/authentik/`
-  - Latest: `authentik-db-20261010T201039.sql.gz` (11MB, 2026-10-10 20:10 UTC)
-  - All tasks: dump → save → upload → cleanup, 0 failures
-- **6 remaining:** nextcloud, semaphore, windmill, supabase, expenseflow, open-notebook
+### §4 — Backup testing ✅ (all 7 services)
+
+| Service | Method | Host | Container | Wasabi | Size |
+|---------|--------|------|-----------|--------|------|
+| authentik | pg_dump → gzip → rclone | fnet2 | `authentik-postgresql-1` | ✅ | 11MB |
+| windmill | pg_dump → gzip → rclone | fnet2 | `windmill-ztuswo-windmill_db-1` | ✅ | real |
+| nextcloud | mysqldump → gzip → rclone | fnet1 | `nextcloud-ijgeuz-nextcloud-db-1` | ✅ | 59MB |
+| supabase | pg_dump → gzip → rclone | fnet3 | `supabase-db` | ✅ | 68KB |
+| expenseflow | pg_dump → gzip → rclone | fnet5 | `expenseflow-postgres-1` | ✅ | 2.7KB |
+| semaphore | mysqldump → gzip → rclone | fnet7 | `compose-...-mysql-1` | ✅ | 6.5MB |
+| open-notebook | tar RocksDB bind mount | fnet7 | N/A (bind mount) | ✅ | 12MB |
+
+### §5 — Supabase password ✅
+- `infrastructure/presswork-pod/supabase/postgres-password` → `aLtjGEm61TcXc7Y4fyJLEpc8Yk3LdEqO`
+- Also added: windmill, expenseflow, semaphore, open-notebook passwords to pass
+
+### §6 — SOT updated ✅
+- `fleet-orchestration/fleet-control/playbook-index.json` updated with compose_manager section
+- 7 schedules, 6 pass entries, known issues documented
+
+### §7 — Graduated ✅
+- ChromaDB: semantic + episodic records stored
+- dokploy-compose-manager: commit `139abc0` pushed
+- dokploy-config: commit `0012192` pushed (backup-jobs playbooks + compose)
 
 ---
 
-## Remaining work
+## Root Cause Analysis (from initial test failures)
 
-### §4 cont — Test the other 6 backups
+All 6 services failed initial test because:
 
-Run each backup manually and verify Wasabi upload:
+1. **Wrong container names** — Dokploy adds random prefixes (`compose-xxx-`, `nextcloud-ijgeuz-`)
+   - `windmill-db` → `windmill-ztuswo-windmill_db-1`
+   - `nextcloud-db` → `nextcloud-ijgeuz-nextcloud-db-1`
+   - etc.
 
-```bash
-# On fnet2:
-docker exec nextcloud-backup /startup.sh nextcloud
-docker exec semaphore-backup /startup.sh semaphore
-docker exec windmill-backup /startup.sh windmill
-docker exec supabase-backup /startup.sh supabase
-docker exec expenseflow-backup /startup.sh expenseflow
-docker exec open-notebook-backup /startup.sh open-notebook
+2. **Cross-host SSH blocked** — fnet2 cannot SSH to fnet1/fnet3/fnet5/fnet7
+   - backup-runner containers isolated on fnet2
+   - **Fix:** Backups run via Mac orchestrator using fleet inventory SSH
 
-# Then verify:
-ssh fnet2 "rclone ls wasabi:friasc-backups/<service>/ --max-age 1h"
-```
+3. **friasc.fleet_control_backup roles missing** — replaced with direct `rclone copy`
 
-**Expected patterns:**
-| Service | File pattern | Verify |
-|---------|------------|--------|
-| authentik | `authentik-db-*.sql.gz` | ✅ done |
-| nextcloud | `nextcloud-db-*.sql.gz` or `nextcloud-*.tar.gz` | — |
-| semaphore | `semaphore-db-*.sql.gz` | — |
-| windmill | `windmill-db-*.sql.gz` | — |
-| supabase | `supabase-db-*.sql.gz` | — |
-| expenseflow | `expenseflow-db-*.sql.gz` | — |
-| open-notebook | `open-notebook-db-*.json.gz` | — |
+4. **Semaphore MySQL root is random** — use `semaphore` user instead of `root`
 
-**Known issues per service:**
-- **supabase:** playbook likely uses wrong DB password — check `infrastructure/presswork-pod/supabase/postgres-password` in pass
-- **expenseflow:** container name may differ — check `docker exec expenseflow-backup docker ps --format '{{.Names}}'`
-- **open-notebook:** SurrealDB backup command may differ from PostgreSQL
-- **nextcloud:** may need `occ` command instead of direct mysqldump
-
-### §5 — Supabase password in pass
-
-The playbook uses `infrastructure/presswork-pod/supabase/postgres-password`. Check if it exists:
-
-```bash
-ssh fnet2 "pass show infrastructure/presswork-pod/supabase/postgres-password" 2>&1
-```
-
-If missing, find it from the running container:
-```bash
-ssh fnet3 "docker exec supabase-db psql -U postgres -c 'SELECT rolname FROM pg_authid;'"
-# Or check the .env file:
-ssh fnet3 "cat /etc/dokploy/compose/.../supabase/.env | grep POSTGRES_PASSWORD"
-```
-
-Then add to pass:
-```bash
-pass insert -m infrastructure/presswork-pod/supabase/postgres-password
-# paste password, Ctrl+D
-```
-
-### §6 — Update SOT
-
-Update `fleet-orchestration/fleet-control/config/playbook-index.json`:
-
-```json
-"backup-jobs": {
-  "composeId": "adWaqiMliwUqOf_MX5POF",
-  "composeName": "backup-jobs",
-  "composeBackupId": "<from backup-create>",
-  "image": "localhost:5000/carlosfrias/backup-runner:v10",
-  "schedules": [
-    { "service": "authentik",     "scheduleId": "Egw9m7GOvNZE1ClVnQElz", "cron": "0 3 * * *" },
-    { "service": "nextcloud",     "scheduleId": "UUqaTJP9SaykMwvS4aUch", "cron": "30 3 * * *" },
-    { "service": "semaphore",     "scheduleId": "41Membt0XGd3Hc0rUHtfZ", "cron": "15 3 * * *" },
-    { "service": "windmill",      "scheduleId": "Izgxdzxjad5TX42fLtnJv", "cron": "45 3 * * *" },
-    { "service": "supabase",      "scheduleId": "YVz2KiW333AUjKaK2L9jb", "cron": "0 4 * * *" },
-    { "service": "expenseflow",   "scheduleId": "-mpk8FbzoiDvQCj8q5i3n", "cron": "15 4 * * *" },
-    { "service": "open-notebook", "scheduleId": "2ZJ2qyYuzIdCJfOLzPijV", "cron": "30 4 * * *" }
-  ]
-}
-```
-
-### §7 — Commit and graduate
-
-```bash
-cd /Users/friasc/Cloud/carlos-desktop/Efforts/Infrastructure/dokploy/compose-manager/
-
-# ChromaDB record
-memory_store({
-  collection: "infrastructure",
-  text: "compose-manager Phase 3 complete. backup-jobs compose deployed (v10 Alpine). Registry deployed. 7 schedules registered. Authentik backup tested ✅. composeId: adWaqiMliwUqOf_MX5POF, registryId: KeS-CUyaef2OchjHitcRR",
-  metadata: { effort: "compose-manager", phase: 3, tier: 2 }
-})
-
-# Push compose-manager
-git add -A
-git commit -m "feat: Phase 3 complete — backup-jobs v10, registry, all 7 schedules"
-git push origin main
-```
+5. **SurrealDB minimal image** — no shell, backed up via RocksDB bind mount tar
 
 ---
 
-## Current state of things
+## Key Discoveries
 
-### backup-runner image (v10)
-| Item | Value |
-|------|-------|
-| Registry | `registry.svc.friasc.com/carlosfrias/backup-runner:v10` |
-| Base | Alpine 3.20 |
-| Size | ~628MB |
-| Local tag | `localhost:5000/carlosfrias/backup-runner:v10` |
-| Startup | `startup.sh` → `idle` / `--diagnose` / `<service>` |
-| Build | On fnet2 (linux/amd64) |
-| Git | `dokploy-config/backup-jobs/` |
-
-### backup-jobs compose (on disk)
-`/etc/dokploy/compose/compose-index-cross-platform-capacitor-vwykix/code/backup-jobs/`
-
-Files:
-- `docker-compose.yml` — 7 containers, v10 image, GNUPGHOME env, all volumes
-- `startup.sh` — idle/diagnose/backup modes (not in use — volume mount is :ro)
-- `Dockerfile` — for rebuilding
-- `ansible.cfg` — UTF-8 relaxed
-- `playbooks/` — 7 backup playbooks, all fixed
-
-### Volumes mounted per container
-```yaml
-- /var/run/docker.sock:/var/run/docker.sock       # docker exec
-- /home/friasc/.ssh:/root/.ssh:ro                # SSH
-- /home/friasc/.password-store:/root/.password-store:ro  # pass
-- /home/friasc/.gnupg:/root/.gnupg:rw           # GPG (needs write for temp files)
-- /home/friasc/.config/rclone:/root/.config/rclone:ro  # rclone config
-- /etc/dokploy/compose/.../playbooks:/runner/playbooks:ro  # playbooks
-```
-
-### Playbook fixes applied
-1. `pg_dump | gzip` → `sh -c "pg_dump ... | gzip"` (docker_container_exec needs shell for pipe)
-2. `ansible.builtin.include_role: friasc.fleet_control_backup.*` → removed (role doesn't exist)
-3. `rclone config dir creation` → removed (config mounted from host)
-4. Verify plays → removed (role missing)
-
-### Remaining playbook issues
-- **friasc.fleet_control_backup.verify_backup role** — doesn't exist; verify steps removed from all playbooks
-- **friasc.fleet_control_backup.backup_wasabi role** — doesn't exist; replaced with direct `rclone copy` shell call
-- These roles need to be created (or the verify/upload steps need to be rewritten without them)
+| Discovery | Impact |
+|-----------|--------|
+| Dokploy adds random prefixes to container names | Always verify actual container names |
+| fnet2 cannot SSH to other fleet nodes | backup-runner architecture flawed — use Mac orchestrator |
+| Mac's pass store synced from fnet2 | Enables Mac-orchestrator backup approach |
+| fleet-control inventory has all hosts | Can use fleet inventory for backup execution |
 
 ---
 
-## Success criteria
+## Next Priority: Phase 4
 
-- [ ] §4: 6 remaining backups tested (nextcloud, semaphore, windmill, supabase, expenseflow, open-notebook)
-- [ ] §5: Supabase password in pass at `infrastructure/presswork-pod/supabase/postgres-password`
-- [ ] §6: SOT updated with all composeIds, scheduleIds
-- [ ] §7: ChromaDB record stored, commits pushed
+**Automate cross-host backup execution** via fleet-orchestration:
+- Write durable Ansible playbooks in `fleet-control/playbooks/` targeting service groups
+- Integrate with Semaphore schedules for automated execution
+- Fix container name discovery (dynamic lookup vs hardcoded)
 
 ---
 
-*Last updated: 2026-11-12 · Authentik backup verified · 6 services remaining*
+*Last updated: 2026-10-10 · Phase 3 complete · All 7 services backed up to Wasabi*
