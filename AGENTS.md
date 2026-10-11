@@ -4,8 +4,8 @@ submodule: true
 type: operator
 tier: 2
 status: validated
-validated_at: 2026-11-11
-version: "2.0.0"
+validated_at: 2026-11-12
+version: "2.2.0"
 ---
 
 # dokploy-compose-manager — Project Identity
@@ -42,7 +42,7 @@ version: "2.0.0"
 │        schedules + health checks                    │
 ├──────────────────────────────────────────────────────┤
 │ TIER 1 — dokploy-operator                          │
-│ Owns: container lifecycle, Traefik, forward-auth    │
+│ Owns: container lifecycle, Traefik, forward-auth   │
 └──────────────────────────────────────────────────────┘
 
 Routing: canonical effort → compose-manager → dokploy-operator
@@ -107,25 +107,30 @@ Dokploy resolves paths relative to the git clone root. Wrong `composePath` cause
 - Naming: `<domain>/<service>/<purpose>` (IR-7, e.g., `infrastructure/windmill/db-password`)
 - Short-lived tokens belong in the service's environment — mint from refresh tokens in `pass`
 
-### Backup Runner Conventions (from Phase 3)
+### Backup Runner Conventions (Phase 4 — execution model)
 
-**Known container names (verify before every backup run — Dokploy adds random prefixes):**
+**Cross-host backup architecture (Phase 4):**
+```
+Semaphore schedule → fnet2 backup-runner container
+  → su friasc (uses friasc SSH keys)
+  → SSH to remote host → docker exec → pg_dump/mysqldump → stream stdout → gzip
+  → rclone copy to Wasabi → rclone delete --min-age 90d
+```
 
-| Service | Host | Container Name |
-|---------|------|---------------|
-| authentik | fnet2 | `authentik-postgresql-1` |
-| windmill | fnet2 | `windmill-ztuswo-windmill_db-1` |
-| nextcloud | fnet1 | `nextcloud-ijgeuz-nextcloud-db-1` |
-| supabase | fnet3 | `supabase-db` |
-| expenseflow | fnet5 | `expenseflow-postgres-1` |
-| semaphore | fnet7 | `compose-program-neural-circuit-hguc18-mysql-1` |
-| open-notebook | fnet7 | N/A (bind mount at `/home/friasc/open-notebook/surreal_data`) |
+**Container security model:** `user: "1000:1000"` in docker-compose.yml so Ansible reads pass as friasc.
+`STARTUP_USER=friasc` env var causes startup.sh to `su -c` into friasc before running Ansible, so SSH uses friasc's authorized_keys (not root's). Volumes map host paths under `/home/friasc/` (not `/root/`).
 
-**Cross-host backup architecture:**
-- backup-runner containers run on fnet2 but **cannot SSH to other hosts** (network isolation)
-- Backups execute via **Mac orchestrator** using fleet-control inventory SSH
-- Pass store must be synced to Mac (`pass insert -m <path> <<< "$(ssh fnet2 'pass <path>')"`)
-- SurrealDB backed up via **RocksDB bind mount tar** (minimal image, no shell)
+**Dynamic container discovery (no hardcoded names):**
+
+| Service | Host | Discovery pattern | Backup method |
+|---------|------|-----------------|---------------|
+| authentik | fnet2 | `docker ps \| grep authentik-postgresql` | Docker socket exec |
+| windmill | fnet2 | `docker ps \| grep windmill_db` | Docker socket exec |
+| nextcloud | fnet1 | SSH → `docker ps \| grep nextcloud_db` | SSH stream |
+| supabase | fnet3 | SSH → `docker ps \| grep supabase-db` | SSH stream |
+| expenseflow | fnet5 | SSH → `docker ps \| grep expenseflow.*postgres` | SSH stream |
+| semaphore | fnet7 | SSH → `docker ps \| grep semaphore.*mysql` | SSH stream |
+| open-notebook | fnet7 | SSH → docker inspect bind mount | SSH tar stream |
 
 **Semaphore MySQL:** MySQL root has random password — use `semaphore` user instead.
 
@@ -164,30 +169,32 @@ Dokploy resolves paths relative to the git clone root. Wrong `composePath` cause
 |-------|--------|-------|
 | Phase 1 | ✅ Complete | SKILL.md scaffold, agent config, quality gates |
 | Phase 2 | ✅ Complete | Backup containers deployed + tested ✅ |
-| Phase 3 | ✅ Complete | All 7 services backed up to Wasabi. Registry deployed. Authentik, NextCloud, Semaphore, Windmill, Supabase, ExpenseFlow, Open-Notebook (SurrealDB) verified. SOT updated. |
+| Phase 3 | ✅ Complete | All 7 services backed up to Wasabi. Registry deployed. |
+| Phase 4 | ✅ Complete | SSH auth fix (user 1000:1000, dynamic container discovery, 90d retention). |
+| Phase 5 | ✅ Complete | backup-runner v25: Alpine `sleep infinity`, writable `/tmp/ssh_config`, `ANSIBLE_SSH_ARGS`. All 7 containers running v25. dokploy-config commit d1faf05. |
 
-### Phase 3 Known Issues
+### Phase 5 Completed (2026-11-12)
 
-| Issue | Impact | Status |
-|-------|--------|--------|
-| Cross-host SSH blocked from fnet2 to other nodes | backup-runner containers isolated — backups run via Mac orchestrator | Documented |
-| Semaphore MySQL root has random password | Use 'semaphore' user instead | Documented |
-| SurrealDB minimal image (no shell) | Backed up via RocksDB bind mount tar | Documented |
-| Dokploy scheduleType:server returns HTTP 500 | Workaround: compose-type schedules | Documented |
-| friasc.fleet_control_backup Ansible roles missing | Replaced with direct rclone shell calls | Documented |
+**Problem solved:** Phase 4 compose drifted to v22 (missing user:1000:1000, SSH mounts). Three runtime bugs in startup.sh.
 
-### Phase 2 Open Items
+**Root cause:** Disk clone of `dokploy-config` edited manually without git. v22 compose lost Phase 4 changes. startup.sh had two bugs: `tail -f /dev/null` exits immediately in Alpine (no `tail` binary), and SSH config append failed on read-only filesystem (playbooks mounted `:ro`).
 
-| Item | Status | Owner | Notes |
-|------|--------|-------|-------|
-| `registry.svc.friasc.com/carlosfrias/backup-runner` Dockerfile | ✅ Complete | compose-manager | Built and pushed to registry (v1.0.0) |
-| `backup-runner` entrypoint.sh | ✅ Complete | compose-manager | BQ-1/BQ-2 compliant (set -euo pipefail, trap EXIT) |
-| Per-service backup playbooks (7 services) | ✅ Complete | compose-manager | Alpine v10 deployed. Authentik backup ✅ (pg_dump → gzip → rclone → Wasabi). All playbooks fixed: sh-wrapped pg_dump, rclone direct upload, verify plays removed.
-| Server job mechanism (Dokploy bug workaround) | ✅ Complete | compose-manager | HTTP 500 bug documented (v0.30.8), compose-type schedule workaround recommended in output/server-job-migration.md |
-| Bring private registry into Dokploy | ✅ Complete | compose-manager | Compose record created at config/registry/docker-compose.yml |
-| open-notebook fragment verification | ✅ Complete | compose-manager | Validated: 19 routers, 10 services, 0 issues |
+**Fixes applied:**
+1. `sleep infinity` — Alpine has no `tail`, `tail -f /dev/null` exits immediately
+2. SSH config written to `/tmp/ssh_config` — playbooks mounted :ro, `/runner/` not writable
+3. `ANSIBLE_SSH_ARGS=-F /tmp/ssh_config` in `run-ansible.sh` — Ansible picks up writable config
+4. Restored Phase 4 compose from git commit `7496771`
+5. Bumped to v25 and rebuilt on fnet2 (Docker Desktop can't push to HTTP registry)
 
-**Dokploy scheduleType Bug Note:** In Dokploy v0.30.8, `schedule-create` with `scheduleType: "server"` returns HTTP 500. This blocks server job registration. Workaround documented: compose-type schedules with backup-runner container embedded in each service compose. See `output/server-job-migration.md` for implementation plan.
+**Files changed (dokploy-config):**
+- `backup-jobs/docker-compose.yml` — bumped to v25
+- `backup-jobs/startup.sh` — sleep infinity, /tmp/ssh_config
+- `backup-jobs/run-ansible.sh` — ANSIBLE_SSH_ARGS=-F /tmp/ssh_config
+- `backup-jobs/install_python_deps.py` — restored from git
+
+**Registry cleanup:** v7–v22, 1.0.x, alpine, latest deleted. `v14` (previous) + `v25` (current) remain.
+
+**Deployment:** All 7 containers (`authentik/semaphore/windmill/nextcloud/supabase/expenseflow/open-notebook-backup`) running v25 on fnet2 with `user: 1000:1000`.
 
 ## §8 Boundaries & Constraints
 
@@ -221,8 +228,7 @@ Dokploy resolves paths relative to the git clone root. Wrong `composePath` cause
 |------|-------|
 | Full skill (MCP tables, Assess/Register/Verify loop) | `AGENTS-DEEP.md` |
 | Architecture diagrams | `ARCHITECTURE.md` |
-| Phase 2 work | `AGENTS-DEEP.md` § Phase 2 Work |
-| Phase 3 discoveries | `AGENTS.md` § Backup Runner Conventions |
+| Phase 4 execution model | `AGENTS.md` § Backup Runner Conventions |
 | Dokploy effort | `Efforts/Infrastructure/dokploy/AGENTS.md` |
 | MCP tools | `mcp__dokploy` (604 tools) |
 | SSH key | `R7VQAMIqCoLqs2E3rr1ff` (Dokploy deploy key) |
@@ -244,7 +250,8 @@ Dokploy resolves paths relative to the git clone root. Wrong `composePath` cause
 **Next improvement priorities:**
 1. ~~Phase 2 completion: per-service backup playbooks + server job workaround~~ ✅
 2. ~~Phase 3: service registrations via compose-manager~~ ✅
-3. Phase 4: automate cross-host backup execution (fleet-orchestration integration, resolve cross-host SSH gap)
+3. ~~Phase 4: automate cross-host backup execution~~ ✅
+4. ~~Phase 5: backup-runner v25 — Alpine fix, writable SSH config~~ ✅
 
 ---
 
