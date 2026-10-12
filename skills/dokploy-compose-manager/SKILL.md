@@ -36,6 +36,8 @@ metadata:
 - Service configuration files (docker-compose.yml, .env templates)
 - Fleet-wide scheduling (Semaphore owns this)
 - Backup-runner Docker image (Phase 2)
+- Post-deploy observability registration (Step O1-O7 above — owned by dokploy-compose-manager post-deploy hook)
+- Prometheus/Alertmanager/Grafana configuration files (fleet-control owns Ansible deployment of these)
 
 ---
 
@@ -231,6 +233,68 @@ git push origin main
 
 ---
 
+## §3.5 Post-Deploy Observability Hook
+
+After a service is deployed and verified (§3 Step 7), register it in the observability stack.
+
+**Trigger:** Service deployed and verified — composeStatus is "done" or "running".
+
+**Template library:** `config/observability/templates/`
+
+**Parameters for each template:**
+| Parameter | Source | Example |
+|-----------|--------|----------|
+| service_name | compose name | `fava-household` |
+| domain | canonical effort | `financial-stewardship` |
+| fqdn | domain registration | `fava-household.svc.friasc.com` |
+| target_host | internal Docker DNS | `fava-household` (container name) |
+| target_port | service port | `8080` |
+
+**Step O1 — Register Prometheus scrape target:**
+Append `prometheus-scrape.yml.j2` rendered output to `config/observability/prometheus/scrape-targets/<service-name>.yml`.
+Example: `config/observability/prometheus/scrape-targets/fava-household.yml`
+
+**Step O2 — Add Alertmanager rules:**
+Append `alertmanager-rule.yml.j2` rendered output to `config/observability/alertmanager/rules/<service-name>.yml`.
+Example: `config/observability/alertmanager/rules/fava-household.yml`
+
+**Step O3 — Provision Grafana dashboard:**
+Copy `grafana-dashboard.json.j2` rendered output to `config/observability/grafana/provisioning/dashboards/<service-name>.json`.
+Example: `config/observability/grafana/provisioning/dashboards/fava-household.json`
+Note: Grafana file provisioning watches this directory. Dashboard appears after container restart or API reload.
+
+**Step O4 — Register Healthchecks.io ping:**
+POST `healthchecks-register.json.j2` rendered payload to `https://healthchecks.svc.friasc.com/api/v1/channels/` with API key from `pass services/healthchecks/api-key`.
+Alternative: Use `hc-ping` CLI if available.
+
+**Step O5 — Configure Promtail pipeline:**
+Append `promtail-pipeline.yml.j2` rendered output to `config/observability/promtail/config.d/<service-name>.yml`.
+Example: `config/observability/promtail/config.d/fava-household.yml`
+
+**Step O6 — Git commit and push:**
+```bash
+cd config/observability/
+git add templates/ prometheus/scrape-targets/ alertmanager/rules/ grafana/provisioning/dashboards/ promtail/config.d/
+git commit -m "observability: register {{ service_name }} monitoring"
+git push origin main
+```
+
+**Step O7 — Notify fleet-control-operator:**
+After push, send A2A message to fleet-control-operator:
+```
+Service {{ service_name }} deployed and observability registered.
+Prometheus scrape target: prometheus/scrape-targets/{{ service_name }}.yml
+Alertmanager rules: alertmanager/rules/{{ service_name }}.yml
+Grafana dashboard: grafana/provisioning/dashboards/{{ service_name }}.json
+Commit: <hash>
+```
+
+**Idempotency:** Before creating any file, check if it already exists. If exists with identical content → skip. If exists with different content → overwrite (service was re-deployed with updated config).
+
+**Who runs this:** dokploy-compose-manager operator, triggered automatically after Step 7 verification.
+
+---
+
 ## §4 Backup Decision Tree
 
 ```
@@ -258,6 +322,9 @@ Is the volume a database?
     │       └── Is the data critical?
     │           └── YES → Consider rclone-based backup via Ansible (Phase 2)
 ```
+
+After Step 5 (volume backup / server job), continue to §3.5 Post-Deploy Observability Hook.
+Backup registration and observability registration are both post-deploy steps.
 
 ### Decision Examples
 
