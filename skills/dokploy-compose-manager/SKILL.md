@@ -250,9 +250,18 @@ After a service is deployed and verified (§3 Step 7), register it in the observ
 | target_host | internal Docker DNS | `fava-household` (container name) |
 | target_port | service port | `8080` |
 
-**Step O1 — Register Prometheus scrape target:**
-Append `prometheus-scrape.yml.j2` rendered output to `config/observability/prometheus/scrape-targets/<service-name>.yml`.
+**Step O1 — Register Prometheus scrape target (blackbox):**
+Render `prometheus-scrape.yml.j2` to `config/observability/prometheus/scrape-targets/<service-name>.yml`.
 Example: `config/observability/prometheus/scrape-targets/fava-household.yml`
+
+⚠️ **Architecture note:** The fleet Prometheus is Ansible-managed (`fleet_control_observability/.../prometheus.yml.j2`).
+Appending fragments to the dokploy-config `prometheus.yml` does NOT activate the target.
+The rendered `<service-name>.yml` file documents the target for SOT/troubleshooting.
+To activate the probe, ALSO add the FQDN to the Ansible template:
+```bash
+git -C /path/to/fleet-control/collections/ansible_collections/friasc/fleet_control_observability/roles/observability_deploy/templates/prometheus.yml.j2 add-line --after='# ADD NEW BLACKBOX TARGETS BELOW' '{{ fqdn }}'
+```
+Or manually add `- https://{{ fqdn }}` to the `blackbox` job `static_configs[0].targets` list.
 
 **Step O2 — Add Alertmanager rules:**
 Append `alertmanager-rule.yml.j2` rendered output to `config/observability/alertmanager/rules/<service-name>.yml`.
@@ -264,7 +273,10 @@ Example: `config/observability/grafana/provisioning/dashboards/fava-household.js
 Note: Grafana file provisioning watches this directory. Dashboard appears after container restart or API reload.
 
 **Step O4 — Register Healthchecks.io ping:**
-POST `healthchecks-register.json.j2` rendered payload to `https://healthchecks.svc.friasc.com/api/v1/channels/` with API key from `pass services/healthchecks/api-key`.
+POST `healthchecks-register.json.j2` rendered payload to:
+`https://healthchecks.svc.friasc.com/api/v1/checks/`
+with `X-Api-Key` header set to `$(pass services/healthchecks/api-key)`.
+Note: the `/api/v1/checks/` endpoint (no trailing slash) creates a new check. Do NOT use `/api/v1/healthchecks/` (404 — endpoint does not exist). Do NOT use `/api/v1/channels/` (that's for notification channels, not checks).
 Alternative: Use `hc-ping` CLI if available.
 
 **Step O5 — Configure Promtail pipeline:**
