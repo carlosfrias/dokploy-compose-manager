@@ -5,7 +5,8 @@ type: operator
 tier: 2
 status: validated
 validated_at: 2026-10-11
-version: "2.2.0"
+version: "2.3.0"
+validated_at: "2026-10-15"
 ---
 
 # dokploy-compose-manager — Project Identity
@@ -256,3 +257,10 @@ Semaphore schedule → fnet2 backup-runner container
 ---
 
 *Part of the Dokploy tier system. Tier 1 = `dokploy-operator`. Tier 3 = canonical service efforts.*
+
+## Change Log
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 2.3.0 | 2026-10-15 | Audit docs moved from `dokploy/docs/` to `compose-manager/docs/`; renamed 2026-01-15/16 → 2026-10-15; committed 0163f86 |
+| 2.2.0 | 2026-10-13 | WORKBENCH.md added; stale docs consumed |
