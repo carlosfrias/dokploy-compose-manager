@@ -330,7 +330,241 @@ subagent({ agent: "fleet-control-operator", task: f"VERIFY playbook registration
 
 ---
 
-## §4 Backup Decision Tree
+## §4 Deployment Validation — Pre-Release Gate
+
+**Purpose:** Verify deployment is complete and valid BEFORE reporting success.
+
+**CRITICAL DISCOVERY (2026-01-16):** Dokploy reports `composeStatus: done` even when containers don't exist (phantom deployment). This is a silent failure mode that §4 must catch.
+
+### §4.1 Container Existence Verification
+
+**MUST** verify containers are running after deploy:
+
+```python
+# After compose_redeploy, verify containers exist
+result = dokploy.docker_getServiceContainersByAppName(
+    appName=f"compose-override-<appName>",
+    serverId=server_id
+)
+
+containers = result.get("data", [])
+if len(containers) == 0:
+    # PHANTOM DEPLOYMENT — Dokploy lied
+    # DO NOT report success
+    raise DeploymentValidationError(
+        f"PHANTOM DEPLOYMENT: composeStatus='done' but 0 containers exist. "
+        f"composeId={compose_id}, serverId={server_id}"
+    )
+
+# Verify required containers are running
+required = {"watchman-metrics", "watchman-logs"}
+running = {c["name"] for c in containers if c["state"] == "running"}
+missing = required - running
+if missing:
+    raise DeploymentValidationError(
+        f"DEPLOYMENT INCOMPLETE: Required containers missing: {missing}"
+    )
+```
+
+### §4.2 Volume Mount Verification
+
+**MUST** verify volumes are registered in Dokploy:
+
+```python
+# After deploy, verify mounts are registered
+compose = dokploy.compose_one(composeId=compose_id)
+mounts = compose.get("mounts", [])
+
+if len(mounts) == 0:
+    raise DeploymentValidationError(
+        f"DEPLOYMENT INCOMPLETE: No volumes mounted in Dokploy. "
+        f"composeId={compose_id}"
+    )
+
+required_volumes = {"watchman-vmdata", "watchman-osdata"}
+mounted_volumes = {m["volumeName"] for m in mounts}
+missing = required_volumes - mounted_volumes
+if missing:
+    raise DeploymentValidationError(
+        f"DEPLOYMENT INCOMPLETE: Required volumes not mounted: {missing}"
+    )
+```
+
+### §4.3 Orphaned Backup Detection
+
+**MUST** detect backups for non-existent containers:
+
+```python
+# Audit: backups should not exist for missing containers
+backups = dokploy.volumeBackups_list(composeId=compose_id)
+
+running = get_running_containers(server_id)  # docker ps
+for backup in backups:
+    volume = backup["volumeName"]
+    # Map volume to expected container
+    expected_container = volume.replace("-vmdata", "-metrics").replace("-osdata", "-logs")
+    
+    if expected_container not in running:
+        # ORPHANED BACKUP — container doesn't exist
+        dokploy.volumeBackups_delete(volumeBackupId=backup["volumeBackupId"])
+        log(f"DELETED ORPHANED BACKUP: {backup['volumeBackupId']} for missing container {expected_container}")
+```
+
+### §4.4 Missing Backup Detection
+
+**MUST** ensure all container volumes have backups:
+
+```python
+# Every volume-mounted container needs a backup
+required_backups = {
+    "watchman-metrics": "watchman-vmdata",
+    "watchman-logs": "watchman-osdata"
+}
+
+backups = {b["volumeName"] for b in dokploy.volumeBackups_list(composeId=compose_id)}
+
+for container, volume in required_backups.items():
+    if container in running and volume not in backups:
+        raise DeploymentValidationError(
+            f"DEPLOYMENT INCOMPLETE: Missing backup for {container} (volume: {volume})"
+        )
+```
+
+### §4.5 Backup Schedule Verification
+
+**MUST** verify backup schedules exist:
+
+```python
+# Every backup needs a schedule
+schedules = dokploy.schedule_list(composeId=compose_id)
+
+for backup in backups:
+    has_schedule = any(
+        s.get("volumeBackupId") == backup["volumeBackupId"]
+        for s in schedules
+    )
+    if not has_schedule:
+        raise DeploymentValidationError(
+            f"DEPLOYMENT INCOMPLETE: Backup {backup['volumeBackupId']} has no schedule"
+        )
+```
+
+### §4.6 Validation Gate — Block Until Complete
+
+**CRITICAL:** Deployment MUST NOT report success until ALL validations pass.
+
+```python
+def deploy_with_validation(compose_id, server_id):
+    """
+    Deploy compose and validate BEFORE reporting success.
+    
+    Returns: {
+        "container_count": int,
+        "volume_mount_count": int,
+        "backup_count": int,
+        "schedule_count": int,
+        "overall_status": "PASS" | "FAIL",
+        "validation_details": [
+            {"check": "containers", "status": "PASS" | "FAIL", "details": "..."},
+            ...
+        ]
+    }
+    """
+    # Step 1: Deploy
+    dokploy.compose_redeploy(composeId=compose_id)
+    
+    # Step 2: Wait for deployment to settle
+    time.sleep(30)
+    
+    # Step 3: Run all validations
+    validations = []
+    
+    # §4.1: Container existence
+    containers = verify_containers(compose_id, server_id)
+    validations.append({
+        "check": "containers",
+        "status": "PASS" if containers else "FAIL",
+        "details": f"{len(containers)} containers running"
+    })
+    
+    # §4.2: Volume mounts
+    mounts = verify_mounts(compose_id)
+    validations.append({
+        "check": "volumes",
+        "status": "PASS" if mounts else "FAIL",
+        "details": f"{len(mounts)} volumes mounted"
+    })
+    
+    # §4.3: Orphaned backups
+    orphaned = verify_no_orphaned_backups(compose_id)
+    validations.append({
+        "check": "orphaned_backups",
+        "status": "PASS" if not orphaned else "FAIL",
+        "details": f"{orphaned} orphaned backups"
+    })
+    
+    # §4.4: Missing backups
+    missing_backups = verify_backups_exist(compose_id)
+    validations.append({
+        "check": "backups",
+        "status": "PASS" if not missing_backups else "FAIL",
+        "details": f"{missing_backups} missing backups"
+    })
+    
+    # §4.5: Schedules
+    schedules = verify_schedules(compose_id)
+    validations.append({
+        "check": "schedules",
+        "status": "PASS" if schedules else "FAIL",
+        "details": f"{schedules} schedules configured"
+    })
+    
+    # Step 4: Build report
+    failures = [v for v in validations if v["status"] == "FAIL"]
+    
+    return {
+        "container_count": len(containers),
+        "volume_mount_count": len(mounts),
+        "backup_count": count_backups(compose_id),
+        "schedule_count": len(schedules),
+        "overall_status": "PASS" if not failures else "FAIL",
+        "validation_details": validations
+    }
+```
+
+**GATE RULE:** If `overall_status == "FAIL"`:
+- DO NOT report success
+- Return full validation report with failures
+- Alert human immediately
+- Do NOT proceed to §3.5 (post-deploy hooks)
+
+### §4.7 Phantom Deployment Detection
+
+**Special case:** Dokploy reports `composeStatus: done` but containers don't exist.
+
+This is the PHANTOM DEPLOYMENT failure mode. Detected by:
+
+```python
+compose = dokploy.compose_one(composeId=compose_id)
+compose_status = compose["composeStatus"]
+
+# Check actual container state
+containers = dokploy.docker_getServiceContainersByAppName(
+    appName=compose["appName"],
+    serverId=compose["serverId"]
+)
+
+if compose_status == "done" and len(containers["data"]) == 0:
+    # PHANTOM DETECTED
+    raise PhantomDeploymentError(
+        f"PHANTOM DEPLOYMENT: Dokploy reports 'done' but no containers exist. "
+        f"composeId={compose_id}, appName={compose['appName']}, serverId={compose['serverId']}"
+    )
+```
+
+---
+
+## §5 Backup Decision Tree
 
 ```
 Is the volume a database?
