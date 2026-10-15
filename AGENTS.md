@@ -4,7 +4,7 @@ submodule: true
 type: operator
 tier: 2
 status: validated
-validated_at: 2026-11-12
+validated_at: 2026-10-11
 version: "2.2.0"
 ---
 
@@ -173,7 +173,7 @@ Semaphore schedule → fnet2 backup-runner container
 | Phase 4 | ✅ Complete | SSH auth fix (user 1000:1000, dynamic container discovery, 90d retention). |
 | Phase 5 | ✅ Complete | backup-runner v25: Alpine `sleep infinity`, writable `/tmp/ssh_config`, `ANSIBLE_SSH_ARGS`. All 7 containers running v25. dokploy-config commit d1faf05. |
 
-### Phase 5 Completed (2026-11-12)
+### Phase 5 Completed (2026-10-12)
 
 **Problem solved:** Phase 4 compose drifted to v22 (missing user:1000:1000, SSH mounts). Three runtime bugs in startup.sh.
 

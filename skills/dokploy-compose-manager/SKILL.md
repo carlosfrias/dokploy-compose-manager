@@ -307,6 +307,29 @@ Commit: <hash>
 
 ---
 
+## §3.6 Tier 3 Fan-Out (Post-Hook)
+
+After completing §3.5 Steps O1-O7, dispatch to T3 operators for platform-level integration.
+
+**Trigger:** §3.5 Steps O1-O7 completed successfully.
+
+```python
+# T3 fan-out — dispatch in parallel after §3.5 complete
+# These operators own platform-level integrations that cross compose boundaries
+
+subagent({ agent: "observability-operator", task: f"VERIFY O1-O5 deployed for {service_name}: Prometheus scrape target created, Alertmanager rules created, Grafana dashboard provisioned, Healthchecks.io pings registered, Promtail pipeline configured. Report PASS/FAIL." })
+
+subagent({ agent: "traefik-operator", task: f"VERIFY domain routes for {service_name}: Domain {fqdn} registered in Dokploy, Traefik route active. Report PASS/FAIL." })
+
+subagent({ agent: "homer-operator", task: f"VERIFY Homer dashboard entry for {service_name}: Entry exists in services_sot/defaults/main.yml, config.yml regenerated. Report PASS/FAIL." })
+
+subagent({ agent: "fleet-control-operator", task: f"VERIFY playbook registration for {service_name}: <service-name>-verify playbook registered in playbook-index.json, Semaphore schedule active. Report PASS/FAIL." })
+```
+
+**Fan out in parallel.** Do NOT wait for one before starting the next.
+
+---
+
 ## §4 Backup Decision Tree
 
 ```
