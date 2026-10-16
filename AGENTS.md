@@ -83,6 +83,30 @@ Is the volume a database?
 
 **Dokploy scheduleType bug:** `scheduleType: "server"` returns HTTP 500 in Dokploy v0.30.8. Workaround: use compose-type schedules with a dedicated backup container in each compose. See `output/server-job-migration.md` for implementation details.
 
+## §4.5 Networking Constraints
+
+> [!warning] Bridge Networking Required for Traefik Routing
+> Dokploy's Traefik integration discovers containers via their Docker network interface.
+> Host-mode containers have no Docker network interface — Traefik cannot attach.
+
+compose-manager registers compose records for services deployed via Dokploy. Some will be routed via Traefik (domain routing). The following constraint applies to all registrations:
+
+| `network_mode` | Traefik labels | Registerable? |
+|---|---|---|
+| (none / bridge) | Yes | ✅ Yes |
+| `host` | No | ✅ Yes (host IP access only) |
+| `host` | Yes | ❌ No — Docker Compose v2 rejects; Traefik cannot attach |
+
+**Before every registration, validate the compose YAML with V4:**
+```bash
+python ~/Cloud/carlos-desktop/Efforts/Infrastructure/operators/dokploy-operator/validate/dokploy_validation.py \
+  --name "<compose-name>" \
+  --compose-yaml "<path-to-compose.yml>"
+```
+If V4 fails, reject the registration and report the conflict.
+
+Reference: `Atlas/Works/Infrastructure/Docker-Networking-and-Dokploy-Traefik-Integration.md`
+
 ## §5 Conventions
 
 ### composePath Convention (CRITICAL)
@@ -152,6 +176,7 @@ Semaphore schedule → fnet2 backup-runner container
 | **DO-5** | Write to FRM ledger for every action. |
 | **DO-6** | Commit and push after every registration. |
 | **DO-7** | Escalate data loss risk to human immediately. |
+| **DO-8** | Never register a compose that has `network_mode: host` + Traefik labels — Docker Compose v2 rejects this. Enforce at registration time using `validate_networking()` from `dokploy-operator/validate/dokploy_validation.py`. See V4 in `dokploy-operator/SKILL.md`. |
 
 ## §7 Current State
 
