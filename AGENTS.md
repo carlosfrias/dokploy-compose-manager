@@ -4,9 +4,7 @@ submodule: true
 type: operator
 tier: 2
 status: validated
-validated_at: 2026-10-11
-version: "2.3.0"
-validated_at: "2026-10-15"
+validated_at: "2026-10-16"
 ---
 
 # dokploy-compose-manager — Project Identity
