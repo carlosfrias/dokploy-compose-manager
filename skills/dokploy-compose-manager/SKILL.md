@@ -6,7 +6,7 @@ description: |
   server job (stateful), health check. Uses Dokploy MCP exclusively.
   Dispatches Tier 3 to service operators.
 metadata:
-  version: "0.2.0"
+  version: "0.1.0"
   author: "Carlos Frias"
   phase: 1
 ---
@@ -307,264 +307,7 @@ Commit: <hash>
 
 ---
 
-## §3.6 Tier 3 Fan-Out (Post-Hook)
-
-After completing §3.5 Steps O1-O7, dispatch to T3 operators for platform-level integration.
-
-**Trigger:** §3.5 Steps O1-O7 completed successfully.
-
-```python
-# T3 fan-out — dispatch in parallel after §3.5 complete
-# These operators own platform-level integrations that cross compose boundaries
-
-subagent({ agent: "observability-operator", task: f"VERIFY O1-O5 deployed for {service_name}: Prometheus scrape target created, Alertmanager rules created, Grafana dashboard provisioned, Healthchecks.io pings registered, Promtail pipeline configured. Report PASS/FAIL." })
-
-subagent({ agent: "traefik-operator", task: f"VERIFY domain routes for {service_name}: Domain {fqdn} registered in Dokploy, Traefik route active. Report PASS/FAIL." })
-
-subagent({ agent: "homer-operator", task: f"VERIFY Homer dashboard entry for {service_name}: Entry exists in services_sot/defaults/main.yml, config.yml regenerated. Report PASS/FAIL." })
-
-subagent({ agent: "fleet-control-operator", task: f"VERIFY playbook registration for {service_name}: <service-name>-verify playbook registered in playbook-index.json, Semaphore schedule active. Report PASS/FAIL." })
-```
-
-**Fan out in parallel.** Do NOT wait for one before starting the next.
-
----
-
-## §4 Deployment Validation — Pre-Release Gate
-
-**Purpose:** Verify deployment is complete and valid BEFORE reporting success.
-
-**CRITICAL DISCOVERY (2026-01-16):** Dokploy reports `composeStatus: done` even when containers don't exist (phantom deployment). This is a silent failure mode that §4 must catch.
-
-### §4.1 Container Existence Verification
-
-**MUST** verify containers are running after deploy:
-
-```python
-# After compose_redeploy, verify containers exist
-result = dokploy.docker_getServiceContainersByAppName(
-    appName=f"compose-override-<appName>",
-    serverId=server_id
-)
-
-containers = result.get("data", [])
-if len(containers) == 0:
-    # PHANTOM DEPLOYMENT — Dokploy lied
-    # DO NOT report success
-    raise DeploymentValidationError(
-        f"PHANTOM DEPLOYMENT: composeStatus='done' but 0 containers exist. "
-        f"composeId={compose_id}, serverId={server_id}"
-    )
-
-# Verify required containers are running
-required = {"watchman-metrics", "watchman-logs"}
-running = {c["name"] for c in containers if c["state"] == "running"}
-missing = required - running
-if missing:
-    raise DeploymentValidationError(
-        f"DEPLOYMENT INCOMPLETE: Required containers missing: {missing}"
-    )
-```
-
-### §4.2 Volume Mount Verification
-
-**MUST** verify volumes are registered in Dokploy:
-
-```python
-# After deploy, verify mounts are registered
-compose = dokploy.compose_one(composeId=compose_id)
-mounts = compose.get("mounts", [])
-
-if len(mounts) == 0:
-    raise DeploymentValidationError(
-        f"DEPLOYMENT INCOMPLETE: No volumes mounted in Dokploy. "
-        f"composeId={compose_id}"
-    )
-
-required_volumes = {"watchman-vmdata", "watchman-osdata"}
-mounted_volumes = {m["volumeName"] for m in mounts}
-missing = required_volumes - mounted_volumes
-if missing:
-    raise DeploymentValidationError(
-        f"DEPLOYMENT INCOMPLETE: Required volumes not mounted: {missing}"
-    )
-```
-
-### §4.3 Orphaned Backup Detection
-
-**MUST** detect backups for non-existent containers:
-
-```python
-# Audit: backups should not exist for missing containers
-backups = dokploy.volumeBackups_list(composeId=compose_id)
-
-running = get_running_containers(server_id)  # docker ps
-for backup in backups:
-    volume = backup["volumeName"]
-    # Map volume to expected container
-    expected_container = volume.replace("-vmdata", "-metrics").replace("-osdata", "-logs")
-    
-    if expected_container not in running:
-        # ORPHANED BACKUP — container doesn't exist
-        dokploy.volumeBackups_delete(volumeBackupId=backup["volumeBackupId"])
-        log(f"DELETED ORPHANED BACKUP: {backup['volumeBackupId']} for missing container {expected_container}")
-```
-
-### §4.4 Missing Backup Detection
-
-**MUST** ensure all container volumes have backups:
-
-```python
-# Every volume-mounted container needs a backup
-required_backups = {
-    "watchman-metrics": "watchman-vmdata",
-    "watchman-logs": "watchman-osdata"
-}
-
-backups = {b["volumeName"] for b in dokploy.volumeBackups_list(composeId=compose_id)}
-
-for container, volume in required_backups.items():
-    if container in running and volume not in backups:
-        raise DeploymentValidationError(
-            f"DEPLOYMENT INCOMPLETE: Missing backup for {container} (volume: {volume})"
-        )
-```
-
-### §4.5 Backup Schedule Verification
-
-**MUST** verify backup schedules exist:
-
-```python
-# Every backup needs a schedule
-schedules = dokploy.schedule_list(composeId=compose_id)
-
-for backup in backups:
-    has_schedule = any(
-        s.get("volumeBackupId") == backup["volumeBackupId"]
-        for s in schedules
-    )
-    if not has_schedule:
-        raise DeploymentValidationError(
-            f"DEPLOYMENT INCOMPLETE: Backup {backup['volumeBackupId']} has no schedule"
-        )
-```
-
-### §4.6 Validation Gate — Block Until Complete
-
-**CRITICAL:** Deployment MUST NOT report success until ALL validations pass.
-
-```python
-def deploy_with_validation(compose_id, server_id):
-    """
-    Deploy compose and validate BEFORE reporting success.
-    
-    Returns: {
-        "container_count": int,
-        "volume_mount_count": int,
-        "backup_count": int,
-        "schedule_count": int,
-        "overall_status": "PASS" | "FAIL",
-        "validation_details": [
-            {"check": "containers", "status": "PASS" | "FAIL", "details": "..."},
-            ...
-        ]
-    }
-    """
-    # Step 1: Deploy
-    dokploy.compose_redeploy(composeId=compose_id)
-    
-    # Step 2: Wait for deployment to settle
-    time.sleep(30)
-    
-    # Step 3: Run all validations
-    validations = []
-    
-    # §4.1: Container existence
-    containers = verify_containers(compose_id, server_id)
-    validations.append({
-        "check": "containers",
-        "status": "PASS" if containers else "FAIL",
-        "details": f"{len(containers)} containers running"
-    })
-    
-    # §4.2: Volume mounts
-    mounts = verify_mounts(compose_id)
-    validations.append({
-        "check": "volumes",
-        "status": "PASS" if mounts else "FAIL",
-        "details": f"{len(mounts)} volumes mounted"
-    })
-    
-    # §4.3: Orphaned backups
-    orphaned = verify_no_orphaned_backups(compose_id)
-    validations.append({
-        "check": "orphaned_backups",
-        "status": "PASS" if not orphaned else "FAIL",
-        "details": f"{orphaned} orphaned backups"
-    })
-    
-    # §4.4: Missing backups
-    missing_backups = verify_backups_exist(compose_id)
-    validations.append({
-        "check": "backups",
-        "status": "PASS" if not missing_backups else "FAIL",
-        "details": f"{missing_backups} missing backups"
-    })
-    
-    # §4.5: Schedules
-    schedules = verify_schedules(compose_id)
-    validations.append({
-        "check": "schedules",
-        "status": "PASS" if schedules else "FAIL",
-        "details": f"{schedules} schedules configured"
-    })
-    
-    # Step 4: Build report
-    failures = [v for v in validations if v["status"] == "FAIL"]
-    
-    return {
-        "container_count": len(containers),
-        "volume_mount_count": len(mounts),
-        "backup_count": count_backups(compose_id),
-        "schedule_count": len(schedules),
-        "overall_status": "PASS" if not failures else "FAIL",
-        "validation_details": validations
-    }
-```
-
-**GATE RULE:** If `overall_status == "FAIL"`:
-- DO NOT report success
-- Return full validation report with failures
-- Alert human immediately
-- Do NOT proceed to §3.5 (post-deploy hooks)
-
-### §4.7 Phantom Deployment Detection
-
-**Special case:** Dokploy reports `composeStatus: done` but containers don't exist.
-
-This is the PHANTOM DEPLOYMENT failure mode. Detected by:
-
-```python
-compose = dokploy.compose_one(composeId=compose_id)
-compose_status = compose["composeStatus"]
-
-# Check actual container state
-containers = dokploy.docker_getServiceContainersByAppName(
-    appName=compose["appName"],
-    serverId=compose["serverId"]
-)
-
-if compose_status == "done" and len(containers["data"]) == 0:
-    # PHANTOM DETECTED
-    raise PhantomDeploymentError(
-        f"PHANTOM DEPLOYMENT: Dokploy reports 'done' but no containers exist. "
-        f"composeId={compose_id}, appName={compose['appName']}, serverId={compose['serverId']}"
-    )
-```
-
----
-
-## §5 Backup Decision Tree
+## §4 Backup Decision Tree
 
 ```
 Is the volume a database?
@@ -759,42 +502,7 @@ command: |
 
 ### ASSESS Phase
 
-**CRITICAL:** §4 validation MUST run BEFORE any registration to establish baseline.
-
 ```bash
-# 0. §4 VALIDATION FIRST — Establish current deployment state
-# This is MANDATORY. Do not skip.
-
-# §4.1: Check if phantom deployment exists
-compose = mcp__dokploy compose-one({ composeId: "<composeId>" })
-compose_status = compose.get("composeStatus")
-
-containers = mcp__dokploy docker-getServiceContainersByAppName({
-    appName: compose["appName"],
-    serverId: compose["serverId"]
-})
-container_count = len(containers.get("data", []))
-
-if compose_status == "done" and container_count == 0:
-    log("PHANTOM DEPLOYMENT DETECTED — blocking ASSESS")
-    # Alert human immediately (see §14 SLA)
-    # DO NOT proceed until phantom resolved
-    raise PhantomDeploymentError(...)
-
-# §4.2: Check volume mounts
-mounts = compose.get("mounts", [])
-log(f"§4.2: {len(mounts)} volumes mounted")
-
-# §4.3: Check for orphaned backups
-backups = mcp__dokploy volumeBackups-list({ composeId: "<composeId>" })
-for backup in backups:
-    volume = backup["volumeName"]
-    expected_container = volume_to_container_map.get(volume)
-    if expected_container not in running_containers:
-        log(f"§4.3 ORPHANED BACKUP: {backup['volumeBackupId']} for missing {expected_container}")
-        # Delete orphaned backup immediately (G-5)
-        mcp__dokploy volumeBackups-delete({ volumeBackupId: backup["volumeBackupId"] })
-
 # 1. Load canonical service effort context (if provided)
 # Read compose config from git:
 cat $CWD/config/<service>/docker-compose.yml
@@ -811,8 +519,6 @@ mcp__dokploy health-list({ composeId: "<composeId>" })
 
 # 3. Determine what is missing vs 7-step contract
 # Log each finding:
-#   ✓ §4.1: Container verification passed (X containers running)
-#   ✓ §4.2: X volumes mounted
 #   ✓ Step 1: compose record exists
 #   ✗ Step 2: env var PG_PASS missing
 #   ✓ Step 3: domain nextcloud.svc.friasc.com exists
@@ -831,52 +537,10 @@ For each step:
 
 ### VERIFY Phase
 
-**CRITICAL:** This is where phantom deployments are caught. DO NOT skip.
-
 ```bash
-# §4.6: Return complete validation report BEFORE declaring success
-
 # After all registrations complete:
-compose = mcp__dokploy compose-one({ composeId: "<composeId>" })
-
-# §4.1: Container verification
-containers = mcp__dokploy docker-getServiceContainersByAppName({
-    appName: compose["appName"],
-    serverId: compose["serverId"]
-})
-
-if len(containers.get("data", [])) == 0:
-    # PHANTOM DEPLOYMENT — Dokploy lied
-    log("CRITICAL: PHANTOM DEPLOYMENT DETECTED IN VERIFY")
-    # Alert human immediately (see §14 SLA)
-    raise PhantomDeploymentError(
-        f"composeStatus={compose['composeStatus']} but 0 containers"
-    )
-
-# §4.2: Volume mount verification
-mounts = compose.get("mounts", [])
-if len(mounts) == 0:
-    log("WARNING: §4.2 FAIL — No volumes mounted")
-    # Block §3.5 (G-2)
-
-# Build validation report
-validation_report = {
-    "container_count": len(containers.get("data", [])),
-    "volume_mount_count": len(mounts),
-    "backup_count": len(mcp__dokploy volumeBackups-list({ composeId: "<composeId>" })),
-    "schedule_count": len(mcp__dokploy schedule-list({ composeId: "<composeId>" })),
-    "overall_status": "PASS" if all_checks_pass else "FAIL",
-    "validation_details": [...]
-}
-
-# G-3: Return validation report — this is MANDATORY
-log(f"§4 VALIDATION REPORT: {json.dumps(validation_report)}")
-
-# DO NOT proceed to §3.5 if FAIL (G-2)
-if validation_report["overall_status"] == "FAIL":
-    log("BLOCKING §3.5 — Validation failed")
-    # Alert human
-    raise ValidationError(validation_report)
+mcp__dokploy compose-one({ composeId: "<composeId>" })
+# Check: composeStatus should be "done" or containers should be healthy
 
 mcp__dokploy domain-list({ composeId: "<composeId>" })
 # Count: should match expected domain count
@@ -945,8 +609,6 @@ Every ad-hoc fix must be graduated:
 
 ## §12 Anti-Drift Rules
 
-### DO-N Rules (Governance)
-
 - **DO-1:** Run ASSESS before any REGISTER. No exceptions.
 - **DO-2:** Use MCP exclusively for all Dokploy operations. SSH only as last resort (IR-12).
 - **DO-3:** Graduate every fix to git + SOT + ChromaDB. No exceptions.
@@ -954,48 +616,6 @@ Every ad-hoc fix must be graduated:
 - **DO-5:** Write to FRM ledger for every action.
 - **DO-6:** Commit and push after every registration.
 - **DO-7:** Escalate data loss risk to human immediately.
-
-### §4 G-Rules (Deployment Validation Enforcement)
-
-These rules enforce §4 deployment validation. Violations are **CRITICAL** and require immediate remediation.
-
-- **G-1:** NEVER return success after `compose_redeploy` without running §4.1 container verification. Dokploy's `composeStatus: done` is unreliable — it does NOT verify containers exist.
-- **G-2:** NEVER proceed to §3.5 (post-deploy hooks) if ANY §4 verification fails. The fan-out must only happen after successful validation.
-- **G-3:** NEVER report "deployment complete" without returning the validation report structure (§4.6): `container_count`, `volume_mount_count`, `backup_count`, `schedule_count`, `overall_status`, `validation_details`.
-- **G-4:** On phantom deployment detection (§4.7): DO NOT retry automatically. Alert human immediately. Log: `PHANTOM DEPLOYMENT: Dokploy reports 'done' but 0 containers exist for composeId=<id>`.
-- **G-5:** On orphaned backup detection (§4.3): Delete the orphaned backup BEFORE reporting success. Orphaned backups indicate the target container doesn't exist.
-- **G-6:** On missing backup detection (§4.4): Block deployment completion. Create the backup BEFORE reporting success.
-- **G-7:** On missing schedule detection (§4.5): Block deployment completion. Create the schedule BEFORE reporting success.
-
-### Phantom Deployment Response Protocol
-
-When §4.1 detects a phantom deployment:
-
-```python
-# 1. DO NOT retry automatically
-# 2. Alert human immediately
-log("CRITICAL: PHANTOM DEPLOYMENT DETECTED")
-log(f"  composeId: {compose_id}")
-log(f"  composeStatus: done (Dokploy)")
-log(f"  containers: 0 (actual docker ps)")
-log(f"  required: {required_containers}")
-
-# 3. Return full validation report with FAIL status
-return {
-    "overall_status": "FAIL",
-    "failure_reason": "PHANTOM_DEPLOYMENT",
-    "validation_details": [...],
-    "next_steps": [
-        "1. Check deployment logs for errors",
-        "2. Verify compose file is valid",
-        "3. Check Docker daemon health on target server",
-        "4. Check for network conflicts (dokploy-network)",
-        "5. Consider manual deployment as fallback"
-    ]
-}
-
-# 4. Escalate to human
-```
 
 ---
 
@@ -1017,49 +637,6 @@ return {
 - SOT structural changes (new fields, schema changes)
 - Swarm or network topology changes
 - Disaster recovery runbooks
-
-### §4 Violations (Require Immediate Escalation)
-
-Phantom deployments and §4 verification failures are **non-negotiable escalation events**:
-
-| Violation | Action | SLA |
-|-----------|--------|-----|
-| G-1: Success returned without container verification | Alert human + block §3.5 | Immediate |
-| G-2: §3.5 fan-out after validation failure | Alert human + revert fan-out | Immediate |
-| G-3: Incomplete validation report | Alert human + block completion | Immediate |
-| G-4: Phantom deployment, auto-retry attempted | Alert human + log root cause | Immediate |
-| G-5: Orphaned backup not deleted | Delete immediately + log | 1 hour |
-| G-6: Missing backup, deployment marked success | Alert human + delete success status | Immediate |
-| G-7: Missing schedule, deployment marked success | Alert human + delete success status | Immediate |
-
----
-
-## §14 Phantom Deployment SLA
-
-**Definition:** A phantom deployment occurs when Dokploy reports `composeStatus: done` but zero containers for that compose exist in `docker ps`.
-
-**Detection:** §4.1 container verification catches this.
-
-**Response SLA:**
-
-| Time | Action | Owner |
-|------|--------|-------|
-| T+0 | §4.1 detects 0 containers despite `composeStatus: done` | dokploy-compose-manager |
-| T+0 | Log PHANTOM DEPLOYMENT event with full context | dokploy-compose-manager |
-| T+0 | Alert human immediately (Slack/PagerDuty) | dokploy-compose-manager |
-| T+0 | Return FAIL status with validation report | dokploy-compose-manager |
-| T+0 | Block §3.5 post-deploy hooks | dokploy-compose-manager |
-| T+1hr | Human acknowledges and begins investigation | Human |
-| T+4hr | Root cause identified and documented | Human |
-| T+24hr | Remediation complete or escalation to incident | Human |
-
-**Root Causes (Known):**
-1. Docker network `dokploy-network` not available — containers crash on start
-2. Volume name conflicts with existing orphaned volumes
-3. Domain misconfiguration (missing `serviceName`)
-4. Docker daemon out of memory or resources
-
-**Prevention:** Run §4 validation before any post-deploy action.
 
 ---
 
