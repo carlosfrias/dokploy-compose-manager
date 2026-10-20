@@ -109,12 +109,15 @@ Dokploy resolves paths relative to the git clone root. Wrong `composePath` cause
 
 ### Backup Runner Conventions (Phase 4 — execution model)
 
+> **Updated 2026-10-20:** Semaphore was decommissioned 2026-09-30. Backup-runner containers are now long-running (`restart: unless-stopped`) and should be triggered via Windmill scheduled flows or cron. The `semaphore-backup` container is stale (backing up decommissioned service) and should be removed.
+
 **Cross-host backup architecture (Phase 4):**
 ```
-Semaphore schedule → fnet2 backup-runner container
+Windmill scheduled flow → fnet2 backup-runner container
   → su friasc (uses friasc SSH keys)
   → SSH to remote host → docker exec → pg_dump/mysqldump → stream stdout → gzip
   → rclone copy to Wasabi → rclone delete --min-age 90d
+  → ping Healthchecks.io check URL (verify backup succeeded)
 ```
 
 **Container security model:** `user: "1000:1000"` in docker-compose.yml so Ansible reads pass as friasc.
@@ -129,10 +132,11 @@ Semaphore schedule → fnet2 backup-runner container
 | nextcloud | fnet1 | SSH → `docker ps \| grep nextcloud_db` | SSH stream |
 | supabase | fnet3 | SSH → `docker ps \| grep supabase-db` | SSH stream |
 | expenseflow | fnet5 | SSH → `docker ps \| grep expenseflow.*postgres` | SSH stream |
-| semaphore | fnet7 | SSH → `docker ps \| grep semaphore.*mysql` | SSH stream |
+| semaphore | ~~fnet7~~ | **DECOMMISSIONED 2026-09-30** — remove semaphore-backup container | ~~SSH stream~~ |
 | open-notebook | fnet7 | SSH → docker inspect bind mount | SSH tar stream |
 
-**Semaphore MySQL:** MySQL root has random password — use `semaphore` user instead.
+~~**Semaphore MySQL:** MySQL root has random password — use `semaphore` user instead.~~
+> **DECOMMISSIONED 2026-09-30:** Semaphore was removed from fnet7. The `semaphore-backup` container on fnet2 is stale and should be removed.
 
 ## §6 Quality Standards
 
@@ -194,7 +198,7 @@ Semaphore schedule → fnet2 backup-runner container
 
 **Registry cleanup:** v7–v22, 1.0.x, alpine, latest deleted. `v14` (previous) + `v25` (current) remain.
 
-**Deployment:** All 7 containers (`authentik/semaphore/windmill/nextcloud/supabase/expenseflow/open-notebook-backup`) running v25 on fnet2 with `user: 1000:1000`.
+**Deployment:** All 7 containers (`authentik/windmill/nextcloud/supabase/expenseflow/open-notebook-backup`) running v25 on fnet2 with `user: 1000:1000`. The `semaphore-backup` container is stale (Semaphore decommissioned 2026-09-30) and should be removed.
 
 ## §8 Boundaries & Constraints
 
