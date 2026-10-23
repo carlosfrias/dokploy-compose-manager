@@ -32,25 +32,9 @@ When creating new compose entries via `compose-create`:
 
 Dokploy auto-generates machine names like `compose-<verb>-<adjective>-<noun>-<random>` — these are WRONG and must be overridden with human-friendly names. This convention was lost to git corruption (2026-10-19) and restored 2026-10-20.
 
-## GOLDEN PATH PREREQUISITES (MANDATORY — validated 2026-10-23 on Healthchecks.io + Watchman Edge fnet7)
+## GOLDEN PATH (canonical reference — one source)
 
-**Canonical doctrine: `dokploy-operator` SKILL.md § "Golden Path — Service Deployment"; RULES P8–P18 (`.frias/refined-agents/AGENTS-REFINED-v18.md`).**
-
-Prompt-verify BEFORE any deploy or record creation:
-
-1. **Registry TLS** — `registry.svc.friasc.com:5000` must serve valid HTTPS certs; NO per-node insecure-registry daemon fixes (TLS at the registry is the fix; HTTP-only → STOP and remediate infrastructure first)
-2. **Image architecture** — fleet is linux/amd64; builds must target `--platform linux/amd64` (Mac defaults to arm64 → "no matching manifest" at deploy)
-3. **Secrets** — worker nodes cannot read swarm secrets; compose-up cannot resolve external swarm secrets (verified on fnet7). API key travels via file secret `/srv/fleet/secrets/dokploy-api-key` (provisioned per node by fleet Ansible from `pass infrastructure/fleet/dokploy-api-key`)
-4. **One-kick rule (RULE P15)** — exactly ONE `compose-deploy` per change set. A second kick means an infrastructure defect (registry TLS, broken image, config) — fix infrastructure, never re-kick. Push→autodeploy is UNPROVEN (GitHub App webhook has never fired a deploy — verified 2026-10-23)
-
-### Sidecar self-sufficiency (RULE P16) — changes Steps 2–4
-
-When the compose declares `installation-sidecar` v0.1.0+: **the sidecar owns domain + backup registration itself.** Compose files must NEVER carry `DOKPLOY_API_KEY` or `COMPOSE_ID`.
-
-- Compose declares: sidecar service with `secrets: [dokploy_api_key]` (file: `/srv/fleet/secrets/dokploy-api-key`) + env identity (`SERVICE_NAME`, `COMPOSE_NAME`, `SERVER_IP`, `DESTINATION_ID`, `VOLUME_SUFFIX`, `DOKPLOY_BASE_URL`, `SIDECAR_VERSION`) — no credential values
-- Sidecar self-discovers COMPOSE_ID (docker.sock project label → `/api/compose.search` appName match) and self-registers (idempotent, check-before-create)
-- Compose-manager verifies sidecar logs show self-discovery + registrations — never hand-registers what the sidecar owns
-- Step 2 pass-injected env applies only to composes WITHOUT the sidecar
+Pre-deploy prerequisites, one-kick rule, and sidecar self-sufficiency doctrine live in ONE place: `dokploy-operator` SKILL.md § "Golden Path — Service Deployment" + RULES P14–P18 (`.frias/refined-agents/AGENTS-REFINED-v18.md`). **Prompt those prerequisites before any record creation or deploy.** Binding notes for THIS operator: (1) Step 1 records get full GitHub source fields (below); (2) sidecar-managed composes never carry `DOKPLOY_API_KEY`/`COMPOSE_ID` — verify sidecar self-registration logs, never hand-register (RULE P16); (3) pass-injected env (Step 2) only for composes WITHOUT the sidecar.
 
 ## Tier Model
 
