@@ -61,6 +61,21 @@ Routing: canonical effort → compose-manager → dokploy-operator
 
 ---
 
+## §2.5 GOLDEN PATH PREREQUISITES (MANDATORY — validated 2026-10-23)
+
+**Canonical doctrine: `dokploy-operator` SKILL.md § "Golden Path — Service Deployment"; RULES P8–P18 (`.frias/refined-agents/AGENTS-REFINED-v18.md`).**
+
+Prompt-verify BEFORE any deploy or record creation:
+
+1. **Registry TLS** — `registry.svc.friasc.com:5000` must serve valid HTTPS certs; NO per-node insecure-registry daemon fixes
+2. **Image architecture** — fleet is linux/amd64; builds must target `--platform linux/amd64`
+3. **Secrets** — worker nodes cannot read swarm secrets; compose-up cannot resolve external swarm secrets (verified fnet7). API key via file secret `/srv/fleet/secrets/dokploy-api-key` (fleet Ansible, from `pass infrastructure/fleet/dokploy-api-key`)
+4. **One-kick rule (RULE P15)** — exactly ONE `compose-deploy` per change set; a second kick = infrastructure defect — fix infra, never re-kick. Push→autodeploy is UNPROVEN (GitHub App webhook never fired a deploy — verified 2026-10-23)
+
+### Sidecar self-sufficiency (RULE P16) — changes Steps 2–4
+
+When the compose declares `installation-sidecar` v0.1.0+: **the sidecar owns domain + backup registration itself** (idempotent, check-before-create). Compose files never carry `DOKPLOY_API_KEY` or `COMPOSE_ID` — the sidecar reads the file secret and self-discovers COMPOSE_ID via the Dokploy API (docker.sock project label → `/api/compose.search` appName match). Compose-manager ensures the compose declares the sidecar service + identity env (`SERVICE_NAME`, `COMPOSE_NAME`, `SERVER_IP`, `DESTINATION_ID`, `VOLUME_SUFFIX`, `DOKPLOY_BASE_URL`, `SIDECAR_VERSION`) + `secrets: [dokploy_api_key]`, then VERIFIES the sidecar logs show self-discovery + registrations. Never hand-register what the sidecar owns. Step 2 pass-injected env applies only to composes WITHOUT the sidecar.
+
 ## §3 Service Install Contract (7 Steps)
 
 Every new service on Dokploy requires all 7 steps. Skipping steps leaves the service partially managed — incomplete backup coverage, missing health checks, no domain registration.
