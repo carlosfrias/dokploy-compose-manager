@@ -165,7 +165,7 @@ Windmill scheduled flow → fnet2 backup-runner container
 - **GitHub:** `carlosfrias/dokploy-compose-manager`
 - **Type:** Proper git submodule under `carlos-desktop` (`.git/` exists, `.gitmodules` entry correct)
 - **SKILL.md:** `skills/dokploy-compose-manager/SKILL.md` (v0.1.0, Phase 1 scaffold)
-- **Agent config:** `agents/dokploy-compose-manager.md` (model: `glm-5.1:cloud`)
+- **Agent config:** `agents/dokploy-compose-manager.md` (model: `minimax-m2.7:cloud`)
 
 ### Phase Status
 
